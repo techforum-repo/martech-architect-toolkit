@@ -1,0 +1,90 @@
+
+# ==========================================
+# MarTech Architect Toolkit - Global
+# ==========================================
+
+# Python environments and caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# IDE and operating system
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Environment variables and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.key
+*.keystore
+*credentials*.json
+*secrets*.json
+*token*.json
+*.enc
+
+# Application secrets
+.streamlit/secrets.toml
+.streamlit/credentials.toml
+
+# Backups
+backup/
+backups/
+backup_*/
+backup_v*/
+*.bak
+*.backup
+*.orig
+
+# Runtime outputs
+data/
+history/
+logs/
+reports/
+screenshots/
+exports/
+scan_results/
+scan_output/
+outputs/
+tmp/
+temp/
+
+# Browser/network captures
+*.har
+*.pcap
+*.pcapng
+*.netlog
+
+# Local databases
+*.sqlite
+*.sqlite3
+*.db
+
+# Upgrade scripts generated locally
+upgrade_*.ps1
+setup_*_local.ps1
+
+# Application-specific local configurations
+**/config/aem_environments.json
+**/config/aem_mappings.json
+**/config/*.local.json
+**/config/*.private.json
+**/config/*.tmp

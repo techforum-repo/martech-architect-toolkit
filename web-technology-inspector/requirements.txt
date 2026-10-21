@@ -1,0 +1,9 @@
+﻿streamlit>=1.35,<2
+playwright>=1.45,<2
+requests>=2.31,<3
+pandas>=2,<3
+keyring>=25,<27
+
+graphviz>=0.20,<1
+
+cryptography>=42,<48

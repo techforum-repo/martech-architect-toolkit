@@ -1,0 +1,46 @@
+﻿
+# ==========================================
+# Web Technology Inspector
+# Application-specific exclusions
+# ==========================================
+
+# Local AEM configurations
+/config/*.json
+/config/*.tmp
+/config/*token*
+/config/*secret*
+
+# Preserve empty config directory
+!/config/.gitkeep
+
+# Investigation exports
+/investigation*.json
+/investigation*.html
+/attribution_report*.json
+/aem_property_matches*.json
+/component_inventory*.json
+/requests.csv
+/requests.json
+/dependencies.dot
+/page_screenshot*.png
+
+# Legacy application files
+/legacy_pages/
+
+# Local application data
+/data/
+/history/
+/scan_results/
+/scan_output/
+
+# Locally generated application artifacts
+/exports/
+/reports/
+/screenshots/
+/artifacts/
+
+# Local encrypted credentials
+/credentials/
+/.credentials/
+/.web-technology-inspector/
+*.enc
