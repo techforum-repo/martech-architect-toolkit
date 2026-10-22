@@ -22,8 +22,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: adobe-access-manager/requirements.txt
-      - run: pip install -r requirements.txt
+          cache-dependency-path: adobe-access-manager/requirements*.txt
+      - run: pip install -r requirements-dev.txt
       - run: python -m pytest -q
         env:
           # Tests run entirely against the mock Adobe client and a temp SQLite
