@@ -1,0 +1,417 @@
+from __future__ import annotations
+
+"""Reactor API client — Adobe Data Collection (Tags/Launch) monitoring.
+
+Docs: https://experienceleague.adobe.com/en/docs/experience-platform/tags/api/overview
+
+Reactor speaks JSON:API — every list response is `{"data": [{"id", "type",
+"attributes": {...}}]}`. Parsing stays defensive throughout: attribute names
+(`published`, `review_status`, `state`) are Adobe's documented ones but this
+has not been exercised against a live tenant in this session, so the raw
+JSON:API object is always kept alongside each parsed row.
+
+`list_audit_events()`/`parse_audit_event()` are the least stable part of
+this client — Adobe's own docs for `/audit_events` say plainly "the
+implementation... is in flux" as the feature evolves, so field names
+(`attributed_to_email`, `type_of`, ...) are more likely to drift here
+than anywhere else in this file.
+"""
+
+import json
+from typing import Any
+
+import httpx
+
+from ..config import settings
+from ..utils import safe_dict
+from .base import BaseAdobeClient
+
+
+class ReactorClient(BaseAdobeClient):
+    base_url = settings.reactor_base_url
+
+    def _extra_headers(self) -> dict[str, str]:
+        return {
+            "Accept": "application/vnd.api+json;revision=1",
+            "Content-Type": "application/vnd.api+json",
+        }
+
+    async def list_companies(self, http: httpx.AsyncClient) -> list[dict[str, Any]]:
+        data = await self.get(http, "/companies")
+        items = data.get("data", []) if isinstance(data, dict) else []
+        return items if isinstance(items, list) else []
+
+    async def list_properties(self, http: httpx.AsyncClient, company_id: str) -> list[dict[str, Any]]:
+        data = await self.get(http, f"/companies/{company_id}/properties")
+        items = data.get("data", []) if isinstance(data, dict) else []
+        return items if isinstance(items, list) else []
+
+    async def list_extensions(self, http: httpx.AsyncClient, property_id: str) -> list[dict[str, Any]]:
+        data = await self.get(http, f"/properties/{property_id}/extensions")
+        items = data.get("data", []) if isinstance(data, dict) else []
+        return items if isinstance(items, list) else []
+
+    async def list_rules(self, http: httpx.AsyncClient, property_id: str) -> list[dict[str, Any]]:
+        data = await self.get(http, f"/properties/{property_id}/rules")
+        items = data.get("data", []) if isinstance(data, dict) else []
+        return items if isinstance(items, list) else []
+
+    async def list_rule_components(self, http: httpx.AsyncClient, property_id: str, rule_id: str) -> list[dict[str, Any]]:
+        """Confirmed live (a real tenant's working request URL, not a
+        guess): rule_components is addressed via the **flat**
+        `/rules/{rule_id}/rule_components` path, NOT nested under
+        `/properties/{id}/...` the way `/rules` itself is above — a rule
+        id is already globally unique in Reactor, so no property scoping
+        is needed (or accepted) for its own sub-resources. `property_id`
+        is kept as a parameter for symmetry with every other `list_*()`
+        method here, and because every caller already has it in hand from
+        the property walk — it's just not part of this one URL.
+
+        Real, silent bug this fixes: the earlier
+        `/properties/{id}/rules/{rule_id}/rule_components` path 404s, and
+        `base.py`'s `_request()` deliberately returns `{}` on a 404 rather
+        than raising (a 404 there usually just means "this optional
+        sub-resource doesn't exist yet," not an error worth surfacing) —
+        so every single rule_components call failed completely silently,
+        every rule reporting zero components, with no error banner
+        anywhere to notice it by. Reported live as "mapping exists, still
+        property not connected to override rule then to datastream" with
+        no warning shown at all — the 404-swallowing is exactly why."""
+        data = await self.get(http, f"/rules/{rule_id}/rule_components")
+        items = data.get("data", []) if isinstance(data, dict) else []
+        return items if isinstance(items, list) else []
+
+    async def list_libraries(self, http: httpx.AsyncClient, property_id: str) -> list[dict[str, Any]]:
+        data = await self.get(http, f"/properties/{property_id}/libraries")
+        items = data.get("data", []) if isinstance(data, dict) else []
+        return items if isinstance(items, list) else []
+
+    async def list_environments(self, http: httpx.AsyncClient, property_id: str) -> list[dict[str, Any]]:
+        data = await self.get(http, f"/properties/{property_id}/environments")
+        items = data.get("data", []) if isinstance(data, dict) else []
+        return items if isinstance(items, list) else []
+
+    async def list_data_elements(self, http: httpx.AsyncClient, property_id: str) -> list[dict[str, Any]]:
+        data = await self.get(http, f"/properties/{property_id}/data_elements")
+        items = data.get("data", []) if isinstance(data, dict) else []
+        return items if isinstance(items, list) else []
+
+    async def list_audit_events(self, http: httpx.AsyncClient, page_size: int = 50) -> list[dict[str, Any]]:
+        # Adobe's own docs for this one say "the implementation of the
+        # /audit_events endpoint is in flux" — treat this as the least
+        # stable Reactor endpoint in this app, same caution as Audit Query.
+        data = await self.get(http, "/audit_events", params={"page[size]": page_size})
+        items = data.get("data", []) if isinstance(data, dict) else []
+        return items if isinstance(items, list) else []
+
+    async def test_connection(self) -> bool:
+        async with self._new_http_client() as http:
+            await self.list_companies(http)
+        return True
+
+
+_BAD_LIBRARY_STATES = {"failed", "rejected"}
+_GOOD_LIBRARY_STATES = {"published", "approved"}
+
+
+def parse_property(item: dict[str, Any]) -> dict[str, Any]:
+    attrs = safe_dict(item.get("attributes"))
+    # `domains` is a top-level array of strings on the same property
+    # attributes this function already reads (confirmed via Adobe's own
+    # Properties endpoint docs: required for web properties, "an array of
+    # URL domains for the property") — no extra call or extra permission
+    # needed beyond the property GET this app already makes.
+    domains_raw = attrs.get("domains")
+    domains = [str(d) for d in domains_raw if d] if isinstance(domains_raw, list) else []
+    return {
+        "property_id": str(item.get("id") or ""),
+        "property_name": str(attrs.get("name") or item.get("id") or "(unnamed)"),
+        "domains": domains,
+        "raw": item,
+    }
+
+
+def _extract_datastream_ids(attrs: dict[str, Any]) -> dict[str, str]:
+    """{environment: datastream_id} for every environment override this
+    Web SDK extension's settings actually carry — confirmed via Adobe's
+    docs that Reactor's extensions *list* response (not just the
+    single-item GET) already includes each extension's full `settings`
+    attribute, so no extra per-extension call is needed to get it.
+
+    `settings` is a JSON-*encoded string* per Adobe's own example response
+    (`"settings": "{...}"`), not a nested object — parsed defensively here
+    since a malformed value shouldn't crash the whole property fetch.
+
+    Confirmed live (a real tenant's raw extension response, not a guess):
+    the datastream ids are **not** top-level keys on `settings` at all —
+    they sit inside `settings["instances"]`, a *list* of named Web SDK
+    instance configs (the extension supports configuring more than one;
+    the common case, confirmed live, is exactly one named `"alloy"`). The
+    two earlier versions of this function both looked at the wrong nesting
+    level entirely and silently found nothing on every property, always —
+    a real live bug, not a shape mismatch that degraded gracefully.
+
+    Also confirmed live: this tenant's exact key names are `edgeConfigId`
+    (production), `stagingEdgeConfigId` (staging), and
+    `developmentEdgeConfigId` (development) — the older, flat naming.
+    `datastreamId`/`stagingDatastreamId`/`developmentDatastreamId` (the
+    newer rename Adobe's own docs describe replacing `edgeConfigId` with)
+    are checked first as a fallback in case a different tenant/extension
+    version has actually migrated to them, but no live example of that has
+    been seen — only the older names have been confirmed to exist.
+
+    Multiple instances (rare) are merged into one result; an environment
+    key is suffixed with `" ({instance name})"` only when more than one
+    instance is actually present, so the common single-instance case keeps
+    plain `"production"`/`"staging"`/`"development"` keys. Only
+    environments with a non-empty value are included — an environment
+    with no override configured is absent from the result entirely, not
+    an empty-string entry.
+
+    Detected by the presence of these setting keys themselves, not by
+    matching the Web SDK extension's own package name/delegate_descriptor_id
+    (confirmed live to be `"adobe-alloy"` /
+    `"adobe-alloy::extensionConfiguration::config"`, for what it's worth,
+    though this function still doesn't key off it — a setting name it's
+    uniquely known to carry remains the more robust signal, in case a
+    future extension version renames the package but not its settings)."""
+    settings_raw = attrs.get("settings")
+    if isinstance(settings_raw, str):
+        try:
+            settings_obj = json.loads(settings_raw)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    elif isinstance(settings_raw, dict):
+        settings_obj = settings_raw
+    else:
+        return {}
+    if not isinstance(settings_obj, dict):
+        return {}
+
+    instances = settings_obj.get("instances")
+    if not isinstance(instances, list):
+        return {}
+    instances = [i for i in instances if isinstance(i, dict)]
+    multiple = len(instances) > 1
+
+    result: dict[str, str] = {}
+    for instance in instances:
+        suffix = f" ({instance['name']})" if multiple and instance.get("name") else ""
+        production_id = instance.get("edgeConfigId") or instance.get("datastreamId")
+        if production_id:
+            result[f"production{suffix}"] = str(production_id)
+        staging_id = instance.get("stagingEdgeConfigId") or instance.get("stagingDatastreamId")
+        if staging_id:
+            result[f"staging{suffix}"] = str(staging_id)
+        development_id = instance.get("developmentEdgeConfigId") or instance.get("developmentDatastreamId")
+        if development_id:
+            result[f"development{suffix}"] = str(development_id)
+    return result
+
+
+def parse_extension(item: dict[str, Any]) -> dict[str, Any]:
+    attrs = safe_dict(item.get("attributes"))
+    review_status = str(attrs.get("review_status") or attrs.get("reviewStatus") or "").lower()
+    return {
+        "extension_id": str(item.get("id") or ""),
+        "name": str(attrs.get("name") or attrs.get("display_name") or item.get("id") or "(unnamed)"),
+        "published": bool(attrs.get("published")),
+        "review_status": review_status,
+        "has_issue": review_status in {"rejected", "failed"},
+        "datastream_ids": _extract_datastream_ids(attrs),
+        "raw": item,
+    }
+
+
+def parse_rule(item: dict[str, Any]) -> dict[str, Any]:
+    attrs = safe_dict(item.get("attributes"))
+    return {
+        "rule_id": str(item.get("id") or ""),
+        "name": str(attrs.get("name") or item.get("id") or "(unnamed)"),
+        "enabled": bool(attrs.get("enabled", True)),
+        "published": bool(attrs.get("published")),
+        "raw": item,
+    }
+
+
+def _extract_rule_datastream_overrides(attrs: dict[str, Any]) -> dict[str, dict[str, str]]:
+    """{environment: {"datastream_id": ..., "sandbox": ...}} for every
+    environment override a single rule *action*'s own datastream override
+    actually carries, if any — the Web SDK extension's "Send event" action
+    carries its own optional datastream override, separate from the
+    extension's own default `instances[]` settings
+    _extract_datastream_ids() reads above. This is what lets one rule
+    route just the events matching it to a genuinely different datastream
+    than the property's default (e.g. a "Sensitive page" rule overriding
+    to a restricted datastream no extension config ever names) — exactly
+    the case _extract_datastream_ids() can't see, since it only ever looks
+    at extension-level settings.
+
+    CONFIRMED live — a real tenant's raw `/rule_components` response for a
+    "Send event" component pulled its `settings` and it's exactly this
+    shape: a JSON-*encoded string* (parsed defensively below, same as
+    every other Reactor `settings` field in this file) containing an
+    `edgeConfigOverrides` object keyed by environment
+    (`development`/`staging`/`production`), each holding `enabled`
+    (boolean), `sandbox` (the AEP sandbox's own name — a literal field
+    right there in the override, not something this app has to infer
+    against whichever sandbox happens to be active in the sidebar, unlike
+    every other datastream lookup in this file, since Reactor's
+    *extension*-level config carries no such field at all), and
+    `datastreamId`. One environment's override is fully independent of
+    the others — production, staging, and development can each point at
+    a genuinely different sandbox *and* a genuinely different datastream,
+    not just a different datastream within one fixed sandbox.
+
+    `enabled` is honored: confirmed via the Launch UI's own help text
+    ("should resolve to true to enable overrides, and false to provide no
+    overrides") that `enabled: false` means the override is configured
+    but currently *inactive* — a real "Sensitive" datastream override
+    that's been disabled must not be reported as live. Only a literal
+    `False` skips an environment; anything else (`True`, missing, or a
+    data-element expression string like `"%someVar%"`, which resolves
+    dynamically at runtime and can't be evaluated here) is treated as
+    active, on the theory that a false positive (shown as connected when
+    it's actually dynamically disabled) is far less costly here than a
+    false negative (hiding a genuinely live override).
+
+    A flat, non-nested fallback (the same key names
+    _extract_datastream_ids() checks for the extension's own default
+    config: `datastreamIdOverride`/`edgeConfigIdOverride` etc., sandbox
+    left blank) is kept below in case some other rule action reuses that
+    shape instead of `edgeConfigOverrides` — never seen live, same
+    "checked first as a hedge" treatment _extract_datastream_ids() itself
+    gives the newer `datastreamId`/`edgeConfigId` rename."""
+    settings_raw = attrs.get("settings")
+    if isinstance(settings_raw, str):
+        try:
+            settings_obj = json.loads(settings_raw)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    elif isinstance(settings_raw, dict):
+        settings_obj = settings_raw
+    else:
+        return {}
+    if not isinstance(settings_obj, dict):
+        return {}
+
+    overrides_obj = settings_obj.get("edgeConfigOverrides")
+    if isinstance(overrides_obj, dict):
+        result: dict[str, dict[str, str]] = {}
+        for environment in ("development", "staging", "production"):
+            env_obj = overrides_obj.get(environment)
+            if not isinstance(env_obj, dict):
+                continue
+            if env_obj.get("enabled") is False:
+                continue  # configured but explicitly turned off — not live
+            datastream_id = env_obj.get("datastreamId") or env_obj.get("edgeConfigId")
+            if not datastream_id:
+                continue
+            sandbox_name = env_obj.get("sandbox") or env_obj.get("sandboxName") or ""
+            result[environment] = {"datastream_id": str(datastream_id), "sandbox": str(sandbox_name)}
+        if result:
+            return result
+
+    # Fallback: maybe this rule-level override reuses the same flat,
+    # non-nested key names the extension's own default config settled on
+    # (_extract_datastream_ids()) rather than a dedicated
+    # edgeConfigOverrides object — no sandbox field to read in that shape.
+    result = {}
+    production_id = settings_obj.get("datastreamIdOverride") or settings_obj.get("edgeConfigIdOverride")
+    if production_id:
+        result["production"] = {"datastream_id": str(production_id), "sandbox": ""}
+    staging_id = settings_obj.get("stagingDatastreamIdOverride") or settings_obj.get("stagingEdgeConfigIdOverride")
+    if staging_id:
+        result["staging"] = {"datastream_id": str(staging_id), "sandbox": ""}
+    development_id = settings_obj.get("developmentDatastreamIdOverride") or settings_obj.get("developmentEdgeConfigIdOverride")
+    if development_id:
+        result["development"] = {"datastream_id": str(development_id), "sandbox": ""}
+    return result
+
+
+def parse_rule_component(item: dict[str, Any], rule_id: str, rule_name: str) -> dict[str, Any]:
+    """`rule_id`/`rule_name` are passed in rather than read off `item`
+    (Reactor's rule_component response carries no back-reference to its
+    parent rule at all — it's only ever fetched scoped to one rule's own
+    /rule_components endpoint) so a caller walking many rules can still
+    tell which rule each parsed component came from without a second
+    lookup. `datastream_overrides` is `{}` for the overwhelming majority
+    of components (most rule actions aren't a datastream override at
+    all) — callers filter on that, this function itself doesn't drop
+    anything."""
+    attrs = safe_dict(item.get("attributes"))
+    return {
+        "rule_component_id": str(item.get("id") or ""),
+        "rule_id": rule_id,
+        "rule_name": rule_name,
+        "name": str(attrs.get("name") or item.get("id") or "(unnamed)"),
+        "delegate_descriptor_id": str(attrs.get("delegate_descriptor_id") or ""),
+        "datastream_overrides": _extract_rule_datastream_overrides(attrs),
+        "raw": item,
+    }
+
+
+def parse_library(item: dict[str, Any]) -> dict[str, Any]:
+    attrs = safe_dict(item.get("attributes"))
+    state = str(attrs.get("state") or "").lower()
+    return {
+        "library_id": str(item.get("id") or ""),
+        "name": str(attrs.get("name") or item.get("id") or "(unnamed)"),
+        "state": state,
+        "is_bad": state in _BAD_LIBRARY_STATES,
+        "is_good": state in _GOOD_LIBRARY_STATES,
+        "build_date": str(attrs.get("build_date") or attrs.get("buildDate") or ""),
+        "raw": item,
+    }
+
+
+_BAD_ENVIRONMENT_STATUSES = {"failed"}
+_GOOD_ENVIRONMENT_STATUSES = {"succeeded"}
+
+
+def parse_environment(item: dict[str, Any]) -> dict[str, Any]:
+    attrs = safe_dict(item.get("attributes"))
+    stage = str(attrs.get("stage") or "").lower()
+    status = str(attrs.get("status") or "").lower()
+    return {
+        "environment_id": str(item.get("id") or ""),
+        "name": str(attrs.get("name") or item.get("id") or "(unnamed)"),
+        # development / staging / production — confirmed exactly these
+        # three via Adobe's docs; "production" specifically is what the
+        # DC page and alerts.py's new condition key off of.
+        "stage": stage,
+        "status": status,
+        "is_bad": status in _BAD_ENVIRONMENT_STATUSES,
+        "is_good": status in _GOOD_ENVIRONMENT_STATUSES,
+        "raw": item,
+    }
+
+
+def parse_data_element(item: dict[str, Any]) -> dict[str, Any]:
+    attrs = safe_dict(item.get("attributes"))
+    review_status = str(attrs.get("review_status") or "").lower()
+    return {
+        "data_element_id": str(item.get("id") or ""),
+        "name": str(attrs.get("name") or item.get("id") or "(unnamed)"),
+        "enabled": bool(attrs.get("enabled", True)),
+        "published": bool(attrs.get("published")),
+        "dirty": bool(attrs.get("dirty")),
+        "review_status": review_status,
+        # Same "issue" shape as parse_extension(): unpublished local
+        # changes or a not-yet-submitted-for-review state, surfaced the
+        # same way a rejected extension already is.
+        "has_issue": bool(attrs.get("dirty")) or review_status == "rejected",
+        "raw": item,
+    }
+
+
+def parse_audit_event(item: dict[str, Any]) -> dict[str, Any]:
+    attrs = safe_dict(item.get("attributes"))
+    return {
+        "event_id": str(item.get("id") or ""),
+        "action": str(attrs.get("type_of") or ""),
+        "actor": str(attrs.get("attributed_to_email") or attrs.get("attributed_to_display_name") or ""),
+        "timestamp": str(attrs.get("created_at") or ""),
+        "target": str(attrs.get("display_name") or ""),
+        "raw": item,
+    }
