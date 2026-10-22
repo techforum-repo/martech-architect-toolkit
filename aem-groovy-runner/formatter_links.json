@@ -1,0 +1,26 @@
+{
+  "asset-reference-report": {
+    "formatters": [
+      "asset-reference-excel"
+    ],
+    "default": "asset-reference-excel"
+  },
+  "assets-by-type": {
+    "formatters": [
+      "generic-excel"
+    ],
+    "default": "generic-excel"
+  },
+  "audit-events": {
+    "formatters": [
+      "generic-excel"
+    ],
+    "default": "generic-excel"
+  },
+  "page-report": {
+    "formatters": [
+      "generic-excel"
+    ],
+    "default": "generic-excel"
+  }
+}
