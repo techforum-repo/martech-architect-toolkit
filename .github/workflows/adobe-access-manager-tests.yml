@@ -1,13 +1,18 @@
-name: Tests
+name: adobe-access-manager tests
 
 on:
   push:
     branches: [main]
+    paths: ["adobe-access-manager/**", ".github/workflows/adobe-access-manager-tests.yml"]
   pull_request:
+    paths: ["adobe-access-manager/**", ".github/workflows/adobe-access-manager-tests.yml"]
 
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: adobe-access-manager
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -17,6 +22,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+          cache-dependency-path: adobe-access-manager/requirements.txt
       - run: pip install -r requirements.txt
       - run: python -m pytest -q
         env:
