@@ -1,0 +1,435 @@
+from __future__ import annotations
+
+import re
+from typing import Any
+
+import pandas as pd
+
+from .client import client
+from .database import list_projects, read_managed_groups, read_managed_users, update_managed_user_name, user_project_map
+from .provisioning import run
+from .utils import classify_special_permission, is_special_permission, normalize_group_match_key, split_project_suffix
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class UserLookupError(ValueError):
+    """Raised when a user lookup request is invalid or Adobe cannot be reached."""
+
+
+def normalize_lookup_email(value: str) -> str:
+    email = str(value or "").strip().lower()
+    if not _EMAIL_RE.match(email):
+        raise UserLookupError("Enter a complete email address, for example firstname.lastname@example.com.")
+    return email
+
+
+def lookup_user(email: str) -> dict[str, Any] | None:
+    """Perform an exact Adobe user lookup and normalize membership presentation."""
+    normalized = normalize_lookup_email(email)
+    try:
+        user = run(client.get_user(normalized))
+    except Exception as exc:  # Keep UI/service error consistent without leaking stack traces.
+        raise UserLookupError(str(exc)) from exc
+    if not user:
+        return None
+    result = dict(user)
+    result["email"] = str(result.get("email") or normalized).lower()
+    result["groups"] = set(result.get("groups") or set())
+    result["display_name"] = (
+        f"{result.get('first_name', '')} {result.get('last_name', '')}".strip()
+        or result["email"]
+    )
+    return result
+
+
+def update_user_name(email: str, first_name: str, last_name: str) -> dict[str, Any]:
+    """Rename an existing Adobe user (first/last name only) via UMAPI's `update`
+    action. Only meaningful for an existing user — this doesn't create one.
+
+    On success, also patches the local user-directory cache's row for this
+    email if it's cached (see database.update_managed_user_name), so Browse
+    synced users doesn't keep showing the pre-edit name until the next full
+    sync.
+    """
+    normalized = normalize_lookup_email(email)
+    first_name = first_name.strip()
+    last_name = last_name.strip()
+    try:
+        result = run(client.update_profile(normalized, first_name, last_name))
+    except Exception as exc:  # Keep UI/service error consistent without leaking stack traces.
+        raise UserLookupError(str(exc)) from exc
+    if result.get("success"):
+        update_managed_user_name(normalized, first_name, last_name)
+    return result
+
+
+def effective_project(email: str, last_name: str, assignments: dict[str, str], saved: dict[str, str]) -> str:
+    """A user's project: the local association (user_projects) wins; otherwise a
+    "(ProjectName)" last-name suffix, but only when it names a project saved in
+    Settings (returned in its saved spelling). Anything else is no project."""
+    assigned = assignments.get(email.strip().lower(), "")
+    if assigned:
+        return saved.get(assigned.casefold(), assigned)
+    _, suffix = split_project_suffix(last_name)
+    return saved.get(suffix.casefold(), "") if suffix else ""
+
+
+def split_search_terms(query: str) -> list[str]:
+    """Split a cached-user search into terms — one per line, or separated by
+    comma/semicolon — casefolded and de-duplicated in order."""
+    items = [item.strip().casefold() for item in query.replace(",", "\n").replace(";", "\n").splitlines()]
+    return list(dict.fromkeys(item for item in items if item))
+
+
+def _term_mask(result: pd.DataFrame, term: str) -> pd.Series:
+    return (
+        result["email"].str.casefold().str.contains(term, regex=False, na=False)
+        | result["display_name"].str.casefold().str.contains(term, regex=False, na=False)
+    )
+
+
+def unmatched_search_terms(result: pd.DataFrame, query: str) -> list[str]:
+    """Terms from `query` that matched none of the rows in `result`."""
+    return [term for term in split_search_terms(query) if result.empty or not _term_mask(result, term).any()]
+
+
+def browse_cached_users(query: str = "", project: str = "") -> pd.DataFrame:
+    """Browse the local user directory cache (populated by "Sync users" on the
+    User search page) — no Adobe call. Each row's custom-group count is computed
+    against the *current* group cache rather than stored at sync time, so it
+    stays accurate even if groups are re-synced without re-syncing users.
+
+    `query` may hold several terms (see split_search_terms()); a user matches
+    if any term is a substring of their email or name. `project`, when given,
+    keeps only users whose effective_project() matches it (case-insensitive).
+    """
+    users = read_managed_users()
+    columns = ["email", "display_name", "project", "identity_type", "status", "custom_group_count"]
+    if users.empty:
+        return pd.DataFrame(columns=columns)
+
+    groups_cache = read_managed_groups()
+    valid_group_keys = {
+        str(name).strip().casefold()
+        for name in groups_cache.get("adobe_group_name", pd.Series(dtype=str))
+        if str(name).strip()
+    }
+
+    assignments = user_project_map()
+    saved = {name.casefold(): name for name in list_projects()}
+    rows: list[dict[str, Any]] = []
+    for _, user in users.iterrows():
+        display_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or user["email"]
+        custom_group_count = len(
+            {str(g).strip().casefold() for g in (user.get("groups") or set())} & valid_group_keys
+        )
+        rows.append({
+            "email": user["email"],
+            "display_name": display_name,
+            "project": effective_project(str(user["email"]), str(user.get("last_name") or ""), assignments, saved),
+            "identity_type": user.get("identity_type") or "",
+            "status": user.get("status") or "",
+            "custom_group_count": custom_group_count,
+        })
+    result = pd.DataFrame(rows, columns=columns)
+
+    terms = split_search_terms(query)
+    if terms:
+        mask = pd.Series(False, index=result.index)
+        for term in terms:
+            mask |= _term_mask(result, term)
+        result = result[mask]
+
+    clean_project = project.strip().casefold()
+    if clean_project:
+        result = result[result["project"].str.casefold() == clean_project]
+
+    return result.sort_values(
+        "display_name", key=lambda col: col.astype(str).str.casefold()
+    ).reset_index(drop=True)
+
+
+def get_cached_user(email: str) -> dict[str, Any] | None:
+    """Look up one user from the local cache (no Adobe call) — same return shape
+    as lookup_user(), so it's a drop-in for membership_table()/user_export_table()
+    when drilling into one row from the cached-users browse table."""
+    users = read_managed_users()
+    if users.empty:
+        return None
+    match = users[users["email"].str.casefold() == email.strip().casefold()]
+    if match.empty:
+        return None
+    row = match.iloc[0]
+    display_name = f"{row.get('first_name', '')} {row.get('last_name', '')}".strip() or row["email"]
+    return {
+        "email": row["email"],
+        "first_name": row.get("first_name", ""),
+        "last_name": row.get("last_name", ""),
+        "identity_type": row.get("identity_type", ""),
+        "status": row.get("status", ""),
+        "groups": set(row.get("groups") or set()),
+        "display_name": display_name,
+    }
+
+
+def _known_group_names() -> set[str]:
+    """Normalized (see utils.normalize_group_match_key) names of every
+    currently-synced custom user group — the only data this app has to
+    disambiguate Adobe's "_admin_<name>" (Profile Administrator vs. User
+    Group Administrator; see utils.py's module docstring on
+    classify_special_permission for why that's ambiguous by Adobe's own
+    design).
+
+    Normalizing here (rather than just casefolding) matters because a group
+    name can contain a space, and there's no guarantee which side —  the raw
+    "_admin_<name>" slug or this cached name — is the one using an underscore
+    in its place; collapsing both to the same separator-free key makes the
+    comparison agree either way."""
+    cached = read_managed_groups()
+    if cached.empty or "adobe_group_name" not in cached.columns:
+        return set()
+    return {normalize_group_match_key(v) for v in cached["adobe_group_name"] if str(v).strip()}
+
+
+def special_permissions(user: dict[str, Any]) -> pd.DataFrame:
+    """Org-level administrative roles this user holds (System Administrator,
+    Product Administrator, Support Administrator, ...) — read directly from
+    the user's raw Adobe `groups`, not the synced custom-group cache (these
+    are never part of it, see client.is_user_group()).
+
+    One row per role instance — a user with Product Administrator on three
+    products gets three rows, same `category` ("Product Administrator"),
+    different `detail` (the product name). Group by `category` to reproduce
+    the Admin Console's "PRODUCT ADMINISTRATOR (3)" style count.
+    """
+    names = sorted(
+        {str(g) for g in (user.get("groups") or set()) if is_special_permission(str(g))},
+        key=str.casefold,
+    )
+    columns = ["category", "detail", "raw"]
+    if not names:
+        return pd.DataFrame(columns=columns)
+    known_groups = _known_group_names()
+    rows = [
+        {"category": item.category, "detail": item.detail, "raw": item.raw}
+        for item in (classify_special_permission(name, known_group_names=known_groups) for name in names)
+    ]
+    return pd.DataFrame(rows, columns=columns)
+
+
+def membership_table(user: dict[str, Any], managed_groups: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Return only memberships present in the synchronized custom user-group cache.
+
+    `.attrs["ignored_non_custom_memberships"]` on the result reports how many of
+    the user's real Adobe memberships were excluded because they're not in the
+    local custom-group cache (product profiles, groups that haven't been synced,
+    ...) — context that this table is a subset, not the user's full Adobe
+    membership list. Special/administrative roles (System Administrator, ...)
+    are excluded from both this table and that count — see special_permissions()
+    — since they get their own dedicated section instead of being silently
+    lumped in as "just an unsynced group".
+    """
+    cached = read_managed_groups() if managed_groups is None else managed_groups.copy()
+    memberships = sorted(
+        {g for g in (user.get("groups") or set()) if not is_special_permission(str(g))},
+        key=str.casefold,
+    )
+    columns = ["display_name", "system", "adobe_group_name", "cached"]
+
+    def _finalize(frame: pd.DataFrame, ignored: int) -> pd.DataFrame:
+        frame.attrs["ignored_non_custom_memberships"] = ignored
+        return frame
+
+    if not memberships:
+        return _finalize(pd.DataFrame(columns=columns), 0)
+    if cached.empty or "adobe_group_name" not in cached.columns:
+        return _finalize(pd.DataFrame(columns=columns), len(memberships))
+
+    metadata: dict[str, dict[str, Any]] = {}
+    canonical_names: dict[str, str] = {}
+    for _, row in cached.iterrows():
+        group_name = str(row.get("adobe_group_name") or "").strip()
+        if not group_name:
+            continue
+        key = group_name.casefold()
+        metadata[key] = row.to_dict()
+        canonical_names[key] = group_name
+
+    rows: list[dict[str, Any]] = []
+    ignored = 0
+    for returned_name in memberships:
+        key = str(returned_name).strip().casefold()
+        item = metadata.get(key)
+        if item is None:
+            ignored += 1
+            continue
+        canonical_name = canonical_names[key]
+        rows.append({
+            "display_name": item.get("display_name") or canonical_name,
+            "system": item.get("system") or "Other",
+            "adobe_group_name": canonical_name,
+            "cached": True,
+        })
+
+    if not rows:
+        return _finalize(pd.DataFrame(columns=columns), ignored)
+    result = pd.DataFrame(rows, columns=columns).sort_values(
+        ["system", "display_name", "adobe_group_name"],
+        key=lambda col: col.astype(str).str.casefold(),
+    ).reset_index(drop=True)
+    return _finalize(result, ignored)
+
+
+def user_export_table(user: dict[str, Any], memberships: pd.DataFrame) -> pd.DataFrame:
+    """Build a flat CSV-friendly export of user details and memberships."""
+    if memberships.empty:
+        return pd.DataFrame([{
+            "email": user.get("email", ""),
+            "first_name": user.get("first_name", ""),
+            "last_name": user.get("last_name", ""),
+            "identity_type": user.get("identity_type", ""),
+            "status": user.get("status", ""),
+            "group_display_name": "",
+            "system": "",
+            "adobe_group_name": "",
+        }])
+
+    rows = []
+    for _, membership in memberships.iterrows():
+        rows.append({
+            "email": user.get("email", ""),
+            "first_name": user.get("first_name", ""),
+            "last_name": user.get("last_name", ""),
+            "identity_type": user.get("identity_type", ""),
+            "status": user.get("status", ""),
+            "group_display_name": membership["display_name"],
+            "system": membership["system"],
+            "adobe_group_name": membership["adobe_group_name"],
+        })
+    return pd.DataFrame(rows)
+
+
+def compare_custom_group_memberships(
+    left_user: dict[str, Any],
+    right_user: dict[str, Any],
+    managed_groups: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Compare only memberships present in the synchronized custom-group cache."""
+    cached = read_managed_groups() if managed_groups is None else managed_groups.copy()
+    columns = [
+        "display_name",
+        "system",
+        "adobe_group_name",
+        "left_member",
+        "right_member",
+        "comparison",
+    ]
+    if cached.empty or "adobe_group_name" not in cached.columns:
+        return pd.DataFrame(columns=columns)
+
+    left_keys = {str(value).strip().casefold() for value in (left_user.get("groups") or set())}
+    right_keys = {str(value).strip().casefold() for value in (right_user.get("groups") or set())}
+    rows: list[dict[str, Any]] = []
+    for _, group in cached.iterrows():
+        adobe_name = str(group.get("adobe_group_name") or "").strip()
+        if not adobe_name:
+            continue
+        key = adobe_name.casefold()
+        left_member = key in left_keys
+        right_member = key in right_keys
+        if not left_member and not right_member:
+            continue
+        comparison = "Shared" if left_member and right_member else ("Only first user" if left_member else "Only second user")
+        rows.append({
+            "display_name": group.get("display_name") or adobe_name,
+            "system": group.get("system") or "Other",
+            "adobe_group_name": adobe_name,
+            "left_member": left_member,
+            "right_member": right_member,
+            "comparison": comparison,
+        })
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return pd.DataFrame(rows, columns=columns).sort_values(
+        ["system", "display_name", "adobe_group_name"],
+        key=lambda col: col.astype(str).str.casefold(),
+    ).reset_index(drop=True)
+
+
+def compare_special_permissions(left_user: dict[str, Any], right_user: dict[str, Any]) -> pd.DataFrame:
+    """Compare org-level administrative roles (System Administrator, Product
+    Administrator, ...) between two users — same "Shared/Only first/Only
+    second" shape as compare_custom_group_memberships(), but sourced from
+    each user's raw `groups` directly rather than the custom-group cache,
+    since these roles are never part of it. One row per role instance, same
+    category/detail/raw shape as special_permissions()."""
+    columns = ["category", "detail", "raw", "left_member", "right_member", "comparison"]
+    left_names = {str(g) for g in (left_user.get("groups") or set()) if is_special_permission(str(g))}
+    right_names = {str(g) for g in (right_user.get("groups") or set()) if is_special_permission(str(g))}
+    all_names = left_names | right_names
+    if not all_names:
+        return pd.DataFrame(columns=columns)
+
+    known_groups = _known_group_names()
+    rows: list[dict[str, Any]] = []
+    for name in all_names:
+        left_member = name in left_names
+        right_member = name in right_names
+        comparison = "Shared" if left_member and right_member else ("Only first user" if left_member else "Only second user")
+        item = classify_special_permission(name, known_group_names=known_groups)
+        rows.append({
+            "category": item.category,
+            "detail": item.detail,
+            "raw": name,
+            "left_member": left_member,
+            "right_member": right_member,
+            "comparison": comparison,
+        })
+    return pd.DataFrame(rows, columns=columns).sort_values(
+        ["category", "detail"], key=lambda col: col.astype(str).str.casefold()
+    ).reset_index(drop=True)
+
+
+def build_copy_access_preview(
+    source_user: dict[str, Any],
+    target_users: list[dict[str, Any] | None],
+    target_emails: list[str],
+    selected_group_names: list[str],
+    managed_groups: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Build a read-only per-target preview for copying selected custom groups."""
+    cached = read_managed_groups() if managed_groups is None else managed_groups.copy()
+    columns = [
+        "email", "target_status", "group_display_name", "system",
+        "adobe_group_name", "membership_status", "will_add",
+    ]
+    if cached.empty or not selected_group_names:
+        return pd.DataFrame(columns=columns)
+
+    metadata = {}
+    for _, row in cached.iterrows():
+        name = str(row.get("adobe_group_name") or "").strip()
+        if name:
+            metadata[name.casefold()] = row.to_dict()
+
+    rows = []
+    for email, target in zip(target_emails, target_users):
+        existing = target is not None
+        current = {str(v).strip().casefold() for v in ((target or {}).get("groups") or set())}
+        for group_name in selected_group_names:
+            key = str(group_name).strip().casefold()
+            item = metadata.get(key)
+            if not item:
+                continue
+            already = key in current
+            rows.append({
+                "email": email,
+                "target_status": "Existing" if existing else "New user",
+                "group_display_name": item.get("display_name") or item.get("adobe_group_name"),
+                "system": item.get("system") or "Other",
+                "adobe_group_name": item.get("adobe_group_name"),
+                "membership_status": "Already assigned" if already else "Will add",
+                "will_add": not already,
+            })
+    return pd.DataFrame(rows, columns=columns)

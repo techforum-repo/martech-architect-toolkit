@@ -1,0 +1,287 @@
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+import pandas as pd
+
+from .client import client
+from .retry import call_with_retry
+from .settings_store import allowed_domains
+from .utils import derive_name, normalize_email, validate_email, with_project_suffix
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+def extract_emails_from_first_column(df: pd.DataFrame) -> list[str]:
+    """First-column values from an uploaded CSV/XLSX — no header row required.
+
+    Read the upload with header=None (see the Provision access "Users" step)
+    so every row is treated as data; if the file *does* have a header row,
+    that text just becomes one more value here, and build_user_table()'s
+    validate_email() naturally rejects it (it won't look like an email) rather
+    than this needing to guess whether row 1 is a header.
+    """
+    if df.empty or df.shape[1] == 0:
+        return []
+    return df.iloc[:, 0].dropna().astype(str).tolist()
+
+
+def build_user_table(emails: list[str], project_name: str = "") -> pd.DataFrame:
+    """`project_name`, when given, is appended to every derived last name as
+    "Lastname(ProjectName)" — the actual last name sent to Adobe — so a batch
+    of users provisioned for a specific project/engagement is identifiable by
+    name alone. It's applied here rather than in `derive_name()` (which only
+    ever parses the email itself) so it stays a per-batch, per-wizard-run
+    concern; the result still lands in the editable `last_name` column, so an
+    admin can hand-fix any row afterward."""
+    project_name = project_name.strip()
+    seen: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    for raw in emails:
+        email = normalize_email(raw)
+        duplicate = email in seen
+        seen.add(email)
+        valid, note = validate_email(email, allowed_domains())
+        parsed = derive_name(email)
+        last_name = with_project_suffix(parsed.last_name, project_name)
+        rows.append({
+            "include": valid and not duplicate,
+            "email": email,
+            "first_name": parsed.first_name,
+            "last_name": last_name,
+            "validation": "Duplicate" if duplicate else ("Valid" if valid else "Invalid"),
+            "notes": "Duplicate input" if duplicate else note or ("Review derived name" if parsed.ambiguous else ""),
+        })
+    return pd.DataFrame(rows)
+
+
+def current_groups_by_user(users: pd.DataFrame) -> dict[str, set[str]]:
+    """Live-fetch each included user's current Adobe groups, per email.
+
+    This is the source data for the Provision wizard's "Remove groups" picker —
+    letting an admin pick from what's actually assigned to the selected users,
+    instead of the full group catalog (where picking a group nobody has would
+    silently be a no-op). Kept per-user rather than pre-aggregated: a bulk list
+    of users pasted or uploaded together commonly has different existing
+    groups per person, and the UI needs to show that breakdown, not just a
+    flattened union, so an admin isn't guessing which of "3 of 5 users" a
+    given group actually belongs to. A lookup failure for one user just
+    excludes them here rather than failing the whole thing — the same user
+    will still surface as a lookup failure in Build preview.
+    """
+    by_user: dict[str, set[str]] = {}
+    included = users[users["include"] == True]  # noqa: E712
+    for _, row in included.iterrows():
+        email = str(row["email"])
+        try:
+            existing = run(client.get_user(email))
+        except Exception:
+            continue
+        if not existing:
+            continue
+        by_user[email] = set(existing.get("groups", set()))
+    return by_user
+
+
+def preview(users: pd.DataFrame, groups: list[str], groups_to_remove: list[str] | None = None) -> pd.DataFrame:
+    groups_to_remove = groups_to_remove or []
+    rows: list[dict[str, Any]] = []
+    included = users[users["include"] == True]  # noqa: E712
+    for _, row in included.iterrows():
+        email = str(row["email"])
+        try:
+            existing = run(client.get_user(email))
+            current = set(existing.get("groups", set())) if existing else set()
+            missing = [g for g in groups if g not in current]
+            already = sorted(current.intersection(groups))
+            to_remove = sorted(current.intersection(groups_to_remove))
+            rows.append({
+                "email": email,
+                "name": f"{row.get('first_name','')} {row.get('last_name','')}".strip(),
+                "exists": bool(existing),
+                "user_action": "Use existing" if existing else "Create user",
+                "current_groups": "; ".join(sorted(current)) or "None",
+                "groups_to_add": "; ".join(missing) or "None",
+                "already_assigned": "; ".join(already) or "None",
+                "groups_to_remove": "; ".join(to_remove) or "None",
+                "ready": bool(missing or to_remove or not existing),
+                "lookup": "OK",
+            })
+        except Exception as exc:
+            rows.append({
+                "email": email,
+                "name": f"{row.get('first_name','')} {row.get('last_name','')}".strip(),
+                "exists": False,
+                "user_action": "Lookup failed",
+                "current_groups": "Not evaluated",
+                "groups_to_add": "Not evaluated",
+                "already_assigned": "Not evaluated",
+                "groups_to_remove": "Not evaluated",
+                "ready": False,
+                "lookup": str(exc),
+            })
+    return pd.DataFrame(rows)
+
+
+def compare_users(left: dict[str, Any], right: dict[str, Any]) -> pd.DataFrame:
+    left_groups = set(left.get("groups", set()))
+    right_groups = set(right.get("groups", set()))
+    rows = []
+    for group in sorted(left_groups | right_groups):
+        rows.append({
+            "group": group,
+            "left": group in left_groups,
+            "right": group in right_groups,
+            "difference": "Same" if (group in left_groups) == (group in right_groups) else "Different",
+        })
+    return pd.DataFrame(rows)
+
+
+def validate_users_against_adobe(users: pd.DataFrame) -> pd.DataFrame:
+    """Add read-only Adobe existence and membership information to locally validated rows."""
+    output = users.copy()
+    for column, default in {
+        "adobe_status": "Not checked",
+        "current_group_count": 0,
+        "lookup_details": "",
+    }.items():
+        if column not in output.columns:
+            output[column] = default
+    for index, row in output.iterrows():
+        if str(row.get("validation")) != "Valid" or not bool(row.get("include")):
+            output.at[index, "adobe_status"] = "Skipped"
+            continue
+        email = str(row.get("email") or "")
+        try:
+            existing = run(client.get_user(email))
+            if existing:
+                groups = existing.get("groups", set()) or set()
+                output.at[index, "adobe_status"] = "Existing"
+                output.at[index, "current_group_count"] = len(groups)
+            else:
+                output.at[index, "adobe_status"] = "New"
+                output.at[index, "current_group_count"] = 0
+            output.at[index, "lookup_details"] = ""
+        except Exception as exc:
+            output.at[index, "adobe_status"] = "Lookup failed"
+            output.at[index, "lookup_details"] = str(exc)
+    return output
+
+
+def preview_summary(preview_df: pd.DataFrame) -> dict[str, int]:
+    if preview_df.empty:
+        return {"users": 0, "existing": 0, "new": 0, "assignments": 0, "already": 0, "removals": 0, "failures": 0}
+    existing = int(preview_df.get("exists", pd.Series(dtype=bool)).fillna(False).sum())
+    users = len(preview_df)
+    assignments = 0
+    already = 0
+    removals = 0
+    for value in preview_df.get("groups_to_add", pd.Series(dtype=str)).fillna(""):
+        if value and value != "None" and value != "Not evaluated":
+            assignments += len([item for item in str(value).split(";") if item.strip()])
+    for value in preview_df.get("already_assigned", pd.Series(dtype=str)).fillna(""):
+        if value and value != "None" and value != "Not evaluated":
+            already += len([item for item in str(value).split(";") if item.strip()])
+    for value in preview_df.get("groups_to_remove", pd.Series(dtype=str)).fillna(""):
+        if value and value != "None" and value != "Not evaluated":
+            removals += len([item for item in str(value).split(";") if item.strip()])
+    failures = int((preview_df.get("lookup", pd.Series(dtype=str)) != "OK").sum())
+    return {
+        "users": users,
+        "existing": existing,
+        "new": users - existing - failures,
+        "assignments": assignments,
+        "already": already,
+        "removals": removals,
+        "failures": failures,
+    }
+
+
+def _format_adobe_errors(raw: Any) -> str:
+    """Adobe's /action endpoint can return HTTP 200 with an embedded errors array
+    (e.g. an invalid group name) rather than raising an HTTP error. That path
+    never reaches the retry engine's exception handling, so it's formatted here
+    and always treated as a permanent (non-retryable) per-user failure."""
+    errors = raw.get("errors") if isinstance(raw, dict) else None
+    if not errors:
+        return "Adobe reported the request did not succeed."
+    parts = []
+    for item in errors[:5]:
+        if isinstance(item, dict):
+            parts.append(str(item.get("errorCode") or item.get("message") or item))
+        else:
+            parts.append(str(item))
+    return "; ".join(parts)
+
+
+def execute(users: pd.DataFrame, groups: list[str], test_only: bool, groups_to_remove: list[str] | None = None) -> pd.DataFrame:
+    """Run real (or test-mode) Adobe provisioning for included, ready users.
+
+    Idempotent by construction: each attempt re-reads the user's current Adobe
+    groups (via client.get_user inside client.provision) and only adds what's
+    missing (and only removes groups the user actually still holds), so
+    re-running the same request never creates duplicate users, duplicate group
+    assignments, or a failed removal of something already gone — it just finds
+    everything already in the desired state.
+
+    Transient failures (timeout, 429, 5xx, connection) are retried with
+    exponential backoff via `retry.call_with_retry`. Permanent failures
+    (invalid email, permission denied, an Adobe-rejected group) are not.
+    """
+    groups_to_remove = groups_to_remove or []
+    rows: list[dict[str, Any]] = []
+    included = users[users["include"] == True]  # noqa: E712
+    for _, row in included.iterrows():
+        email = str(row["email"])
+        first_name = str(row.get("first_name", ""))
+        last_name = str(row.get("last_name", ""))
+
+        def attempt(email=email, first_name=first_name, last_name=last_name) -> dict[str, Any]:
+            return run(client.provision(email, first_name, last_name, groups, test_only=test_only, groups_to_remove=groups_to_remove))
+
+        outcome = call_with_retry(attempt)
+        if not outcome.success:
+            rows.append({
+                "email": email, "success": False, "created": False,
+                "groups_added": [], "already_assigned": [], "groups_removed": [],
+                "retries": outcome.retries, "error": outcome.last_error, "adobe_response": {},
+            })
+            continue
+
+        result = outcome.value or {}
+        if not result.get("success", True):
+            rows.append({
+                "email": email, "success": False, "created": False,
+                "groups_added": [], "already_assigned": [], "groups_removed": [],
+                "retries": outcome.retries, "error": _format_adobe_errors(result.get("raw")),
+                "adobe_response": result.get("raw") or {},
+            })
+            continue
+
+        missing = list(result.get("groups_added") or [])
+        removed = list(result.get("groups_removed") or [])
+        already = [g for g in groups if g not in missing]
+        rows.append({
+            "email": email, "success": True, "created": bool(result.get("created")),
+            "groups_added": missing, "already_assigned": already, "groups_removed": removed,
+            "retries": outcome.retries, "error": "", "adobe_response": result.get("raw") or {},
+        })
+    return pd.DataFrame(rows)
+
+
+def execution_summary(results: pd.DataFrame) -> dict[str, int]:
+    if results.empty:
+        return {"created": 0, "existing": 0, "groups_added": 0, "already_assigned": 0, "groups_removed": 0, "failed": 0, "retries": 0}
+    succeeded = results[results["success"]]
+    return {
+        "created": int(succeeded["created"].sum()) if not succeeded.empty else 0,
+        "existing": int((~succeeded["created"]).sum()) if not succeeded.empty else 0,
+        "groups_added": int(succeeded["groups_added"].apply(len).sum()) if not succeeded.empty else 0,
+        "already_assigned": int(succeeded["already_assigned"].apply(len).sum()) if not succeeded.empty else 0,
+        "groups_removed": int(succeeded["groups_removed"].apply(len).sum()) if not succeeded.empty and "groups_removed" in succeeded else 0,
+        "failed": int((~results["success"]).sum()),
+        "retries": int(results["retries"].sum()),
+    }
