@@ -20,3 +20,7 @@ clone the repo, `cd` into a tool and follow its README.
 `WebTechnologyInspector` used to be separate repositories, and `cja-mcp` / `target-mcp`
 lived in `ai-share`. They were merged here with their full commit history; the old
 repositories are archived and point back to this one.
+
+## License
+
+[MIT](LICENSE)
