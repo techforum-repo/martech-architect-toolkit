@@ -1,11 +1,10 @@
-import os
 import unittest
 from unittest.mock import Mock, patch
 
 import requests
 
-from modules import aem_lookup, aem_mock
-from modules.aem import AEMSecurityError, validate_request
+from web_inspector import aem_lookup, aem_mock
+from web_inspector.aem_client import AEMSecurityError, validate_request
 
 AUTHOR = "https://author.example.com"
 ORIGINS = {("https", "author.example.com")}
@@ -64,6 +63,7 @@ class TestQueryBuilderValidation(unittest.TestCase):
             "/content/site/en/page/jcr:content/root.json",
             "/content/site/en/page.json",
             "/apps/site/components/page.infinity.json",
+            "/content/site/en/page.infinity.json",
         ):
             with self.subTest(path=path):
                 with self.assertRaises(AEMSecurityError):
@@ -73,9 +73,7 @@ class TestQueryBuilderValidation(unittest.TestCase):
 class TestMockLookups(unittest.TestCase):
 
     def setUp(self):
-        patcher = patch.dict(os.environ, {"MOCK_AEM": "true"})
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        # The sample environment is always answered from sample data.
         self.environment = aem_mock.ENVIRONMENT
 
     def test_verify_existing_page(self):
@@ -116,14 +114,6 @@ class TestMockLookups(unittest.TestCase):
 
 class TestRealModeErrors(unittest.TestCase):
 
-    def setUp(self):
-        patcher = patch.dict(os.environ, {"MOCK_AEM": ""})
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        origins = patch("modules.aem.approved_origins", return_value=ORIGINS)
-        origins.start()
-        self.addCleanup(origins.stop)
-
     def response(self, status):
         response = Mock()
         response.status_code = status
@@ -131,7 +121,7 @@ class TestRealModeErrors(unittest.TestCase):
             response.raise_for_status.side_effect = requests.HTTPError(response=response)
         return response
 
-    @patch("modules.aem.requests.request")
+    @patch("web_inspector.aem_client.requests.request")
     def test_status_messages(self, request):
         for status, expected in (
             (401, "expired"),
@@ -144,7 +134,7 @@ class TestRealModeErrors(unittest.TestCase):
                 self.assertIn(expected, result["message"])
                 self.assertEqual(result["http_status"], status)
 
-    @patch("modules.aem.requests.request")
+    @patch("web_inspector.aem_client.requests.request")
     def test_redirect_reported_not_followed(self, request):
         request.return_value = self.response(300)
         result = aem_lookup.search_references(
@@ -154,7 +144,7 @@ class TestRealModeErrors(unittest.TestCase):
         self.assertIn("Blocked", result["message"])
         self.assertFalse(request.call_args.kwargs["allow_redirects"])
 
-    @patch("modules.aem.requests.request")
+    @patch("web_inspector.aem_client.requests.request")
     def test_connection_failure(self, request):
         request.side_effect = requests.ConnectionError()
         result = aem_lookup.find_vanity(ENVIRONMENT, "/promo", "t")

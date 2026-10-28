@@ -1,0 +1,11 @@
+# Streamlit reads this from the folder the app is started in (the start
+# scripts cd here first).
+
+[server]
+# Only this machine can open the app. Streamlit's default is every network
+# interface, which would let anyone who can reach the port run scans and use
+# the AEM tokens saved on this machine. Change only if you understand that.
+address = "localhost"
+
+[browser]
+gatherUsageStats = false

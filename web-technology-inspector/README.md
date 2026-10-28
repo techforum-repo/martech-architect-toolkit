@@ -1,134 +1,118 @@
-﻿# Web Technology Inspector
+# Web Technology Inspector
 
-A cross-platform Streamlit application for analyzing
-webpage scripts, network requests, third-party domains,
-and Adobe Experience Manager content mappings.
+A Streamlit app that loads a web page in a real browser, records what it
+loads and why, and ties what it finds back to Adobe Experience Manager.
 
-## Features
+For one page it answers:
 
-- Website network inspection
-- JavaScript inventory
-- Third-party domain detection
-- Request initiator analysis
-- AEM Author content mapping
-- Multiple website configurations
-- Reusable AEM environments
-- Environment-level token management
-- Secure operating system credential storage
-- CSV and JSON exports
+- **Which marketing and analytics technologies run here?** Adobe Web SDK,
+  Analytics, Target, ECID, Tags, Google, Meta, consent tools and more,
+  detected from requests and from the libraries that actually ran on the page.
+- **What does each third party cost?** Requests, bytes transferred and time per domain.
+- **What fires before consent?** Optionally accepts the consent banner during
+  the scan and splits requests and cookies into before / after consent.
+- **How was this script added?** The browser's initiator chain: page HTML,
+  inline code, a tag manager, or another script.
+- **Where is it in AEM?** The AEM page behind the URL, and every node under
+  `/content`, `/conf` and `/apps` on author that references the script or domain.
+- **What changed since last time?** Every scan is kept, and any two scans of a
+  page can be compared.
 
-## Requirements
+Requires Python 3.11 or 3.12.
 
-Python 3.10 or newer.
-
-## Windows
-
-Run:
-
-start.bat
-
-## Linux
-
-Run:
-
-sh start.sh
-
-## AEM Configuration
-
-Open Global AEM Settings.
-
-1. Create an AEM Author environment.
-2. Add website mappings.
-3. Select an environment.
-4. Save an approved bearer token.
-5. Open the Inspector.
-
-Real configuration files are excluded from Git.
-
-Public examples are provided under config/.
-
-## Authentication
-
-Tokens are stored through Python keyring.
-
-Windows normally uses Windows Credential Manager.
-
-Linux requires a configured secure keyring backend,
-such as Secret Service, with an unlocked session.
-
-No plaintext credential fallback is provided.
-
-JWT expiry checks are advisory.
-
-The application does not automatically refresh tokens.
-
-## Limitations
-
-- URL mappings are candidate paths.
-- Vanity URLs and Sling mappings may require additional rules.
-- AEM infinity.json endpoints may be restricted.
-- Browser initiator data may not identify the exact tag rule.
-- Use only with authorized websites and AEM environments.
-- Do not expose the scanner as a public multi-user service
-  without SSRF protection, authentication, and network isolation.
-
-## Security
-
-Do not commit:
-
-- Access tokens
-- Real environment configurations
-- Internal website URLs
-- Network exports
-- Local backups
-- Proprietary code or information
-
-Review repository history before publishing.
-
-Obtain required organizational approvals before
-publishing company-developed code.
-
-## First-Time Configuration
-
-No manual AEM JSON configuration is required.
-
-On first launch, the application automatically creates:
-
-- `config/aem_environments.json`
-- `config/aem_mappings.json`
-
-Both files start with empty arrays.
-
-Use **Global AEM Settings** to add AEM environments,
-configure website mappings, and manage authentication.
-
-Real configuration files are stored locally and excluded
-from Git.
-
-The repository contains `config/.gitkeep` so the
-configuration directory exists after cloning.
-
-AEM credentials are managed through the operating
-system credential store, not JSON files.
-
-
-## Checking AEM lookups (spike)
-
-`scripts/aem_spike.py` checks, for one published URL, which read-only AEM
-lookups work with your access: the prefix mapping, confirming the mapped page
-on author, a vanity URL lookup, and a QueryBuilder search for a domain or
-script under `/content`, `/conf` and `/apps`.
+## Start
 
 ```bash
-# Sample data, no AEM needed
-python scripts/aem_spike.py --mock https://www.example.com/us/en/products.html --term tracking.example.com
+./start-unix.sh          # Linux / macOS
+start-windows.bat        # Windows
+```
 
-# Your author; the token is asked for without echoing
-python scripts/aem_spike.py https://www.your-site.com/us/en/page.html \
+The start script creates a virtual environment, installs dependencies and the
+Chromium browser used for scans, copies `.env.example` to `.env`, and opens the
+app on the first free port from 8502.
+
+The app starts in **mock mode**: a sample scan and sample AEM data, so every
+page can be tried without a website or AEM token. Turn it off in the sidebar,
+or set `MOCK_MODE=false` in `.env`.
+
+## Set up for your sites
+
+On the **Settings** page:
+
+1. Add an **AEM environment**: a name and the author URL, for example
+   `https://author-p12345-e67890.adobeaemcloud.com`.
+2. Add a **website mapping**: the published domain, the URL prefix and the
+   content root it maps to (for example `/us/en` → `/content/site/us/en`).
+   Only domains with a mapping can be scanned.
+3. Add your AEM **Local Development Token** for the environment, kept for the
+   session only or encrypted on this machine (key in the OS credential store).
+
+## How AEM lookups work
+
+All AEM access is read-only `GET` requests, checked in `web_inspector/aem_client.py`
+before anything is sent:
+
+| Step | Request |
+|---|---|
+| Find the page | Prefix mapping, then `<path>/jcr:content.json` (one node) to confirm it exists |
+| Vanity URLs | QueryBuilder search on `sling:vanityPath` when the mapping misses |
+| References | QueryBuilder full-text search under `/content`, `/conf` and `/apps` |
+
+QueryBuilder calls may only use an allowlist of 8 parameters, only under those
+three roots, and return at most 100 results. Redirects are never followed with
+a token.
+
+`scripts/aem_spike.py` runs these lookups for one URL from the command line,
+which is a quick way to check what your AEM user may call:
+
+```bash
+.venv/bin/python scripts/aem_spike.py https://www.your-site.com/us/en/page.html \
     --author https://author-pXXXX-eYYYY.adobeaemcloud.com \
     --prefix /us/en --root /content/your-site/us/en --term tracking.your-vendor.com
 ```
 
-Every request is a GET validated by `modules/aem.py`. QueryBuilder calls are
-limited to an allowlist of parameters and to the `/content`, `/conf` and
-`/apps` roots.
+## Scanning notes
+
+- **Bot protection.** Sites behind Akamai, Cloudflare and similar often block
+  the hidden (headless) browser; the app says so. Tick **Show browser** to scan
+  with a visible window, which is usually allowed.
+- **Consent.** Recognised banners: OneTrust, Cookiebot, TrustArc, Didomi,
+  Usercentrics, Quantcast and Sourcepoint. If none is found, the scan says that
+  nothing was accepted. Consent tools and tag managers loading before consent
+  are marked as expected; other third parties are flagged for review.
+- **First party.** A domain counts as first party when it is the page's domain
+  or a subdomain of it. A site's own CDN on a different domain shows as a third party.
+- **Timing.** The scan scrolls the page and waits for the network to settle
+  (`SETTLE_SECONDS`). Tags that fire later, or only on clicks, are not captured.
+
+## Local data
+
+| Path | Contents |
+|---|---|
+| `config/` | AEM environments and website mappings (JSON, not committed) |
+| `data/inspector.db` | Scan history: technologies, domains, cookie names, consent findings. Never cookie values, inline code or screenshots |
+| `logs/` | Rotating application log |
+
+Files are restricted to your user on Linux and macOS.
+
+## Development
+
+```bash
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest
+.venv/bin/python -m pyflakes web_inspector tests scripts app.py
+```
+
+`tests/test_scanner.py` runs the real scanner in Chromium against fixture pages
+served through Playwright routing, so it needs no network.
+
+`scripts/audit_public_repo.py` is a basic pre-publish check for private URLs,
+tokens and keys in tracked files.
+
+## Limitations
+
+- Tag-manager attribution comes from the browser's initiator chain; the exact
+  tag or rule is not identified.
+- An AEM reference shows where a value is stored, not proof that it caused a request.
+- Full-text search depends on the AEM search index; code under `/apps` may not be indexed.
+- Use only on websites and AEM environments you are authorised to inspect.

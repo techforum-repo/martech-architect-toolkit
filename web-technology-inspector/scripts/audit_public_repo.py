@@ -1,4 +1,4 @@
-﻿"""Basic public-repository preflight checks.
+"""Basic public-repository preflight checks.
 
 This is a heuristic audit, not a comprehensive
 secret or intellectual-property scanner.
@@ -8,7 +8,8 @@ import re
 import subprocess
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+# The app folder (this script lives in its scripts/ subfolder).
+ROOT = Path(__file__).resolve().parent.parent
 
 PATTERNS = {
     "Private network reference": (

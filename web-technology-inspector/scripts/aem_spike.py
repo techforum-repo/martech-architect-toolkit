@@ -28,9 +28,9 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from modules import aem_lookup, aem_mock  # noqa: E402
-from modules.config_manager import load, match, valid_author  # noqa: E402
-from modules.mapping import resolve  # noqa: E402
+from web_inspector import aem_lookup, aem_mock  # noqa: E402
+from web_inspector.mapping import resolve  # noqa: E402
+from web_inspector.site_config import load, match, valid_author  # noqa: E402
 
 
 def line(label, value):
@@ -50,7 +50,7 @@ def load_target(url, args):
     """Return (mapping, environment, token) or exit with a reason."""
 
     if args.mock:
-        os.environ["MOCK_AEM"] = "true"
+        # The sample environment is always answered from sample data.
         return aem_mock.MAPPING, aem_mock.ENVIRONMENT, "mock-token"
 
     if args.author:
@@ -84,7 +84,7 @@ def load_target(url, args):
     if not environment:
         sys.exit("The mapping's AEM environment is not configured.")
 
-    from modules.aem_auth import get_token
+    from web_inspector.token_store import get_token
     token = os.environ.get("AEM_TOKEN", "").strip() or get_token(environment) or ""
     if not token:
         sys.exit("No AEM token. Save one in Global AEM Settings, set AEM_TOKEN, or use --author.")

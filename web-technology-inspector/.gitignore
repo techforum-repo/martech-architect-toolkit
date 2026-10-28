@@ -1,46 +1,38 @@
-﻿
-# ==========================================
-# Web Technology Inspector
-# Application-specific exclusions
-# ==========================================
+# Python
+__pycache__/
+*.py[cod]
 
-# Local AEM configurations
+# Virtual environments
+.venv/
+venv/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Logs and local data (scan history)
+logs/
+*.log
+/data/
+
+# Local AEM configuration (environments and website mappings)
 /config/*.json
 /config/*.tmp
-/config/*token*
-/config/*secret*
-
-# Preserve empty config directory
 !/config/.gitkeep
 
-# Investigation exports
-/investigation*.json
-/investigation*.html
-/attribution_report*.json
-/aem_property_matches*.json
-/component_inventory*.json
-/requests.csv
-/requests.json
-/dependencies.dot
-/page_screenshot*.png
-
-# Legacy application files
-/legacy_pages/
-
-# Local application data
-/data/
-/history/
-/scan_results/
-/scan_output/
-
-# Locally generated application artifacts
-/exports/
-/reports/
-/screenshots/
-/artifacts/
-
-# Local encrypted credentials
+# Locally saved encrypted credentials
 /credentials/
 /.credentials/
-/.web-technology-inspector/
 *.enc
+
+# Downloaded reports and exports
+/investigation*.json
+/investigation*.html
+/requests*.csv
+/dependencies*.dot
+/screenshot*.png
+
+# Streamlit / pytest
+.streamlit/secrets.toml
+.pytest_cache/
