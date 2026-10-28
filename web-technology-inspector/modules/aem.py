@@ -5,11 +5,28 @@ All application AEM inspection requests must use this module.
 
 import json
 from pathlib import Path
-from urllib.parse import urlsplit, unquote
+from urllib.parse import parse_qsl, urlsplit, unquote
 
 import requests
 
 ALLOWED_METHODS = frozenset({"GET", "HEAD"})
+
+QUERYBUILDER_PATH = "/bin/querybuilder.json"
+
+# Read-only QueryBuilder parameters the inspector may send.
+QUERYBUILDER_PARAMETERS = frozenset({
+    "path",
+    "type",
+    "property",
+    "property.value",
+    "fulltext",
+    "p.limit",
+    "p.hits",
+    "p.properties",
+})
+
+# Repository roots a QueryBuilder search may cover.
+QUERYBUILDER_ROOTS = ("/content", "/conf", "/apps")
 
 CONFIG_PATH = (
     Path(__file__).resolve().parent.parent
@@ -53,8 +70,69 @@ def approved_origins():
     return origins
 
 
-def validate_request(method, url):
-    """Validate method, destination, and content endpoint."""
+def _unsafe_path(path):
+    return (
+        any(
+            segment in (".", "..")
+            for segment in path.split("/")
+        )
+        or "\\" in path
+        or "//" in path
+    )
+
+
+def _validate_querybuilder(query):
+    """Allow only read-only search parameters within approved roots."""
+
+    parameters = parse_qsl(query, keep_blank_values=True)
+
+    if not parameters:
+        raise AEMSecurityError("QueryBuilder query is required")
+
+    names = [name for name, _ in parameters]
+
+    if len(names) != len(set(names)):
+        raise AEMSecurityError(
+            "Repeated QueryBuilder parameters are not permitted"
+        )
+
+    for name, value in parameters:
+        if name not in QUERYBUILDER_PARAMETERS:
+            raise AEMSecurityError(
+                "QueryBuilder parameter is not permitted: " + name
+            )
+
+        if name == "p.limit" and not (
+            value.isdigit() and 1 <= int(value) <= 100
+        ):
+            raise AEMSecurityError(
+                "QueryBuilder p.limit must be between 1 and 100"
+            )
+
+    search_root = dict(parameters).get("path", "")
+
+    if (
+        not any(
+            search_root == root
+            or search_root.startswith(root + "/")
+            for root in QUERYBUILDER_ROOTS
+        )
+        or _unsafe_path(search_root)
+    ):
+        raise AEMSecurityError(
+            "QueryBuilder path must be under "
+            + ", ".join(QUERYBUILDER_ROOTS)
+        )
+
+
+def validate_request(method, url, origins=None):
+    """Validate method, destination, and content endpoint.
+
+    Permitted endpoints:
+    - /content/....infinity.json (no query)
+    - /content/.../jcr:content.json, a single page node (no query)
+    - /bin/querybuilder.json with an allowlisted, read-only query
+    """
 
     method = method.upper()
 
@@ -74,30 +152,38 @@ def validate_request(method, url):
             "URL credentials are not permitted"
         )
 
-    if parsed.query or parsed.fragment:
-        raise AEMSecurityError(
-            "Query parameters and fragments are not permitted"
-        )
+    if parsed.fragment:
+        raise AEMSecurityError("Fragments are not permitted")
+
+    if origins is None:
+        origins = approved_origins()
 
     if (
         parsed.scheme,
         parsed.netloc.lower()
-    ) not in approved_origins():
+    ) not in origins:
         raise AEMSecurityError(
             "Destination is not an approved AEM Author origin"
         )
 
     path = unquote(parsed.path)
 
+    if path == QUERYBUILDER_PATH:
+        _validate_querybuilder(parsed.query)
+        return method
+
+    if parsed.query:
+        raise AEMSecurityError(
+            "Query parameters are only permitted for QueryBuilder"
+        )
+
     if (
         not path.startswith("/content/")
-        or not path.endswith(".infinity.json")
-        or any(
-            segment in (".", "..")
-            for segment in path.split("/")
+        or not (
+            path.endswith(".infinity.json")
+            or path.endswith("/jcr:content.json")
         )
-        or "\\" in path
-        or "//" in path
+        or _unsafe_path(path)
     ):
         raise AEMSecurityError(
             "Only approved content JSON endpoints "
@@ -107,10 +193,10 @@ def validate_request(method, url):
     return method
 
 
-def aem_request(method, url, token):
+def aem_request(method, url, token, origins=None):
     """Execute an authorized read-only request."""
 
-    method = validate_request(method, url)
+    method = validate_request(method, url, origins)
 
     if not isinstance(token, str) or not token.strip():
         raise ValueError("AEM bearer token is required")

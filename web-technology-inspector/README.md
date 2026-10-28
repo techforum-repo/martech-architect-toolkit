@@ -111,3 +111,24 @@ configuration directory exists after cloning.
 AEM credentials are managed through the operating
 system credential store, not JSON files.
 
+
+## Checking AEM lookups (spike)
+
+`scripts/aem_spike.py` checks, for one published URL, which read-only AEM
+lookups work with your access: the prefix mapping, confirming the mapped page
+on author, a vanity URL lookup, and a QueryBuilder search for a domain or
+script under `/content`, `/conf` and `/apps`.
+
+```bash
+# Sample data, no AEM needed
+python scripts/aem_spike.py --mock https://www.example.com/us/en/products.html --term tracking.example.com
+
+# Your author; the token is asked for without echoing
+python scripts/aem_spike.py https://www.your-site.com/us/en/page.html \
+    --author https://author-pXXXX-eYYYY.adobeaemcloud.com \
+    --prefix /us/en --root /content/your-site/us/en --term tracking.your-vendor.com
+```
+
+Every request is a GET validated by `modules/aem.py`. QueryBuilder calls are
+limited to an allowlist of parameters and to the `/content`, `/conf` and
+`/apps` roots.
