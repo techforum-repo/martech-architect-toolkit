@@ -1,6 +1,7 @@
 import unittest
 
 from web_inspector.detection import (
+    aem_code_folders,
     consent_violations,
     detect_technologies,
     domain_summary,
@@ -77,3 +78,36 @@ class DetectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FirstPartyConfigTests(unittest.TestCase):
+    def test_extra_first_party_domains(self):
+        self.assertTrue(is_first_party("i.guim.co.uk", "www.theguardian.com", ["guim.co.uk"]))
+        self.assertFalse(is_first_party("i.guim.co.uk", "www.theguardian.com"))
+        self.assertFalse(is_first_party("guim.co.uk.evil.net", "www.theguardian.com", ["guim.co.uk"]))
+        rows = domain_summary([{"url": "https://i.guim.co.uk/a.jpg", "domain": "i.guim.co.uk",
+                                "phase": "before_consent"}], "www.theguardian.com", ["guim.co.uk"])
+        self.assertTrue(rows[0]["first_party"])
+        self.assertEqual(consent_violations(rows), [])
+
+    def test_parse_domains(self):
+        from web_inspector.site_config import parse_domains
+        self.assertEqual(parse_domains(" CDN.Example.com, static.example.net\n.img.example.org "),
+                         ["cdn.example.com", "img.example.org", "static.example.net"])
+        self.assertEqual(parse_domains(""), [])
+        for bad in ("https://cdn.example.com", "cdn.example.com/path", "localhost", "a_b.com"):
+            with self.subTest(bad=bad):
+                self.assertIsNone(parse_domains(bad))
+
+
+class AemCodeFolderTests(unittest.TestCase):
+    def test_project_folders_from_clientlib_urls(self):
+        requests = [{"url": u} for u in (
+            "https://www.example.com/etc.clientlibs/acme/clientlibs/clientlib-site.min.js",
+            "https://www.example.com/etc.clientlibs/acme/clientlibs/clientlib-base.min.css",
+            "https://www.example.com/etc.clientlibs/core/wcm/components/commons/site/clientlibs/x.js",
+            "https://www.example.com/etc.clientlibs/acme-campaigns/clientlibs/promo.js",
+            "https://cdn.other.com/app.js",
+        )]
+        self.assertEqual(aem_code_folders(requests), ["/apps/acme", "/apps/acme-campaigns"])
+        self.assertEqual(aem_code_folders([]), [])

@@ -1,0 +1,31 @@
+name: web-technology-inspector tests
+
+on:
+  push:
+    branches: [main]
+    paths: ["web-technology-inspector/**", ".github/workflows/web-technology-inspector-tests.yml"]
+  pull_request:
+    paths: ["web-technology-inspector/**", ".github/workflows/web-technology-inspector-tests.yml"]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web-technology-inspector
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: web-technology-inspector/requirements*.txt
+      - run: pip install -r requirements-dev.txt
+      # The scanner tests drive real Chromium against fixture pages served by
+      # Playwright routing: no network access to real websites is needed.
+      - run: python -m playwright install --with-deps chromium
+      - run: python -m pyflakes web_inspector tests scripts app.py
+      - run: python -m pytest -q

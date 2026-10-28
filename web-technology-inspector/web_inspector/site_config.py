@@ -5,6 +5,7 @@ Existing configurations are never overwritten.
 """
 
 import json
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -92,6 +93,27 @@ def valid_author(url):
         )
     except ValueError:
         return False
+
+
+DOMAIN = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+
+
+def parse_domains(text):
+    """Comma- or line-separated domains as a sorted list, or None if any is invalid.
+
+    Used for a mapping's extra first-party domains (e.g. a site's own CDN).
+    """
+
+    domains = {
+        part.strip().lower().lstrip(".")
+        for part in re.split(r"[,\s]+", text or "")
+        if part.strip()
+    }
+
+    if any(not DOMAIN.match(domain) for domain in domains):
+        return None
+
+    return sorted(domains)
 
 
 def match(url, mappings):

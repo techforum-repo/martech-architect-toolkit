@@ -128,19 +128,39 @@ def detect_technologies(requests: list[dict], scripts: list[str], page_globals: 
     return results
 
 
+CLIENTLIB_PROJECT = re.compile(r"/etc\.clientlibs/([A-Za-z0-9_.-]+)/")
+
+
+def aem_code_folders(requests: list[dict]) -> list[str]:
+    """/apps folders the page's clientlibs come from: AEM serves /apps/<project>
+    clientlibs at /etc.clientlibs/<project>/..., so the URLs name the folder."""
+    projects = {
+        match.group(1)
+        for request in requests
+        for match in [CLIENTLIB_PROJECT.search(request.get("url", ""))]
+        if match and match.group(1) not in ("core", "clientlibs", "foundation", "granite", "cq", "wcm")
+    }
+    return sorted("/apps/" + project for project in projects)
+
+
 def site_base(page_host: str) -> str:
     """Approximate first-party base: the page host without a leading 'www.'."""
     host = page_host.lower()
     return host[4:] if host.startswith("www.") else host
 
 
-def is_first_party(domain: str, page_host: str) -> bool:
-    base = site_base(page_host)
+def is_first_party(domain: str, page_host: str, extra: tuple[str, ...] | list[str] = ()) -> bool:
+    """The page's own domain or a subdomain of it, or of an extra
+    first-party domain configured on the website mapping."""
     domain = domain.lower()
-    return domain == base or domain.endswith("." + base)
+    return any(
+        domain == base or domain.endswith("." + base)
+        for base in [site_base(page_host), *(e.lower() for e in extra)]
+    )
 
 
-def domain_summary(requests: list[dict], page_host: str) -> list[dict]:
+def domain_summary(requests: list[dict], page_host: str,
+                   extra_first_party: tuple[str, ...] | list[str] = ()) -> list[dict]:
     """Requests, transfer size and time per domain, largest first."""
     rows: dict[str, dict] = {}
     for request in requests:
@@ -150,7 +170,7 @@ def domain_summary(requests: list[dict], page_host: str) -> list[dict]:
         tech = technology_for_url(request.get("url", ""))
         row = rows.setdefault(domain, {
             "domain": domain,
-            "first_party": is_first_party(domain, page_host),
+            "first_party": is_first_party(domain, page_host, extra_first_party),
             "technology": tech.name if tech else "",
             "category": tech.category if tech else "",
             "requests": 0,

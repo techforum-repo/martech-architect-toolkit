@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from ..config import settings
-from ..site_config import load, save, valid_author
+from ..site_config import load, parse_domains, save, valid_author
 from ..token_store import (
     token_status,
     save_token,
@@ -288,6 +288,9 @@ def render():
                         "Domain": item["published_domain"],
                         "Prefix": item["published_prefix"],
                         "Content Root": item["content_root"],
+                        "Also First Party": ", ".join(
+                            item.get("first_party_domains", [])
+                        ),
                         "Environment": options.get(
                             item["environment_id"],
                             "Unknown"
@@ -334,6 +337,15 @@ def render():
                         placeholder="/content/example/en"
                     )
 
+                    first_party = st.text_input(
+                        "Also first party (optional)",
+                        placeholder="example-cdn.com, example-static.net",
+                        help=(
+                            "Your own domains on other names, e.g. the "
+                            "site's CDN. Counted as first party in scans."
+                        )
+                    )
+
                     eid = st.selectbox(
                         "AEM Environment",
                         list(options),
@@ -349,6 +361,7 @@ def render():
                     domain = domain.strip().lower()
                     prefix = prefix.rstrip("/") or "/"
                     root = root.rstrip("/")
+                    first_party_domains = parse_domains(first_party)
 
                     duplicate = any(
                         m["published_domain"].lower() == domain
@@ -360,6 +373,12 @@ def render():
                         name, domain, prefix, root
                     ):
                         st.error("Please enter valid mapping details.")
+
+                    elif first_party_domains is None:
+                        st.error(
+                            "Enter first-party domains like "
+                            "cdn.example.com, separated by commas."
+                        )
 
                     elif duplicate:
                         st.error(
@@ -373,6 +392,7 @@ def render():
                             "published_domain": domain,
                             "published_prefix": prefix,
                             "content_root": root,
+                            "first_party_domains": first_party_domains,
                             "environment_id": eid
                         })
 
@@ -442,6 +462,17 @@ def render():
                         value=current["content_root"]
                     )
 
+                    edit_first_party = st.text_input(
+                        "Also first party (optional)",
+                        value=", ".join(
+                            current.get("first_party_domains", [])
+                        ),
+                        help=(
+                            "Your own domains on other names, e.g. the "
+                            "site's CDN. Counted as first party in scans."
+                        )
+                    )
+
                     environment_ids = list(options)
 
                     current_env = current["environment_id"]
@@ -469,6 +500,7 @@ def render():
                     edit_domain = edit_domain.strip().lower()
                     edit_prefix = edit_prefix.rstrip("/") or "/"
                     edit_root = edit_root.rstrip("/")
+                    edit_first_party_domains = parse_domains(edit_first_party)
 
                     duplicate = any(
                         i != selected_index
@@ -487,6 +519,12 @@ def render():
                     ):
                         st.error("Invalid mapping details.")
 
+                    elif edit_first_party_domains is None:
+                        st.error(
+                            "Enter first-party domains like "
+                            "cdn.example.com, separated by commas."
+                        )
+
                     elif duplicate:
                         st.error(
                             "Another mapping already uses "
@@ -499,6 +537,7 @@ def render():
                             "published_domain": edit_domain,
                             "published_prefix": edit_prefix,
                             "content_root": edit_root,
+                            "first_party_domains": edit_first_party_domains,
                             "environment_id": edit_env
                         }
 

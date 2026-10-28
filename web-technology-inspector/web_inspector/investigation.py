@@ -87,7 +87,8 @@ def run_investigation(url: str, mappings: list[dict], environments: list[dict], 
     if browser:
         result["technologies"] = detect_technologies(
             browser["requests"], browser["scripts"], browser.get("globals", []))
-        result["domains"] = domain_summary(browser["requests"], urlsplit(url).hostname or "")
+        result["domains"] = domain_summary(browser["requests"], urlsplit(url).hostname or "",
+                                           mapping.get("first_party_domains", []))
         stage("technologies", "complete", f"{len(result['technologies'])} detected")
     else:
         stage("technologies", "unavailable")

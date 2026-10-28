@@ -10,9 +10,9 @@ import streamlit as st
 
 from .. import aem_mock, database, mock_scan
 from ..config import settings
-from ..detection import EXPECTED_BEFORE_CONSENT, consent_violations
+from ..detection import EXPECTED_BEFORE_CONSENT, aem_code_folders, consent_violations
 from ..investigation import analyze_target, run_investigation
-from ..report import build_report, dot_graph, html_report, request_graph, requests_csv
+from ..report import build_report, dot_graph, html_report, request_graph, requests_csv, stage_label
 from ..site_config import load, match
 from ..targets import available_targets
 from .shared import megabytes, show_error
@@ -194,6 +194,17 @@ def _attribution_tab(analysis: dict, target: str) -> None:
                 st.code(evidence, language=None)
 
 
+def _groovy_hint(result: dict, target: str) -> None:
+    """Point to the Groovy Runner when code under /apps wasn't found by search."""
+    folders = aem_code_folders(result["browser"]["requests"]) or ["/apps/<your-project>"]
+    st.info(
+        "Nothing found under /apps? AEM's full-text search doesn't cover code files. "
+        "In the **AEM Groovy Runner**, run **Find Text References** with:\n\n"
+        f"- Paths: `{'`, `'.join(folders)}`\n- Text: `{target.strip()}`\n\n"
+        "It reads clientlib JavaScript, HTL and CSS directly, read-only."
+    )
+
+
 def _aem_tab(result: dict, analysis: dict, target: str, searched: bool) -> None:
     page = result.get("aem_page")
     stage = result["stages"].get("aem", {})
@@ -223,10 +234,13 @@ def _aem_tab(result: dict, analysis: dict, target: str, searched: bool) -> None:
                 ]), width="stretch", hide_index=True)
         st.caption("A reference shows where the value is stored, not proof that it caused a request. "
                    "Full-text search depends on the AEM index; code in /apps may not be indexed.")
+        apps = next((r for r in analysis["aem_references"] if r["root"] == "/apps"), None)
+        if apps and not apps["hits"]:
+            _groovy_hint(result, target)
 
 
-def _report_tab(result: dict, browser: dict, analysis: dict) -> None:
-    report = build_report(result, analysis["findings"], analysis["aem_references"])
+def _report_tab(result: dict, browser: dict, analysis: dict, target: str) -> None:
+    report = build_report(result, analysis["findings"], analysis["aem_references"], target)
     col1, col2, col3 = st.columns(3)
     col1.download_button("JSON report", json.dumps(report, indent=2, default=str),
                          "investigation.json", "application/json")
@@ -247,7 +261,7 @@ def render() -> None:
         return
 
     st.dataframe(pd.DataFrame([
-        {"Stage": name.title(), "Status": detail["status"], "Details": detail["detail"]}
+        {"Stage": stage_label(name), "Status": detail["status"], "Details": detail["detail"]}
         for name, detail in result["stages"].items()
     ]), width="stretch", hide_index=True)
 
@@ -296,4 +310,4 @@ def render() -> None:
         else:
             st.info("No screenshot (mock mode, or the scan did not complete).")
     with tabs[7]:
-        _report_tab(result, browser, analysis)
+        _report_tab(result, browser, analysis, target)

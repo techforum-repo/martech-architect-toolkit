@@ -62,6 +62,12 @@ QueryBuilder calls may only use an allowlist of 8 parameters, only under those
 three roots, and return at most 100 results. Redirects are never followed with
 a token.
 
+Full-text search doesn't cover code files under `/apps`. When the `/apps`
+search finds nothing, the app suggests the **Find Text References** script in
+the AEM Groovy Runner (`../aem-groovy-runner`), with the `/apps/<project>`
+folder taken from the page's `/etc.clientlibs/<project>/` URLs. That script
+reads clientlib JavaScript, HTL and CSS directly, read-only.
+
 `scripts/aem_spike.py` runs these lookups for one URL from the command line,
 which is a quick way to check what your AEM user may call:
 
@@ -81,7 +87,8 @@ which is a quick way to check what your AEM user may call:
   nothing was accepted. Consent tools and tag managers loading before consent
   are marked as expected; other third parties are flagged for review.
 - **First party.** A domain counts as first party when it is the page's domain
-  or a subdomain of it. A site's own CDN on a different domain shows as a third party.
+  or a subdomain of it, or is listed under **Also first party** on the website
+  mapping (for a site's own CDN on a different domain).
 - **Timing.** The scan scrolls the page and waits for the network to settle
   (`SETTLE_SECONDS`). Tags that fire later, or only on clicks, are not captured.
 
