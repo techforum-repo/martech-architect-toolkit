@@ -146,3 +146,47 @@ def get(url):
         return MockResponse(404, {})
 
     return MockResponse(404, {})
+
+
+def _dialog(page_path):
+    """A small Page Properties dialog in AEM's markup for a sample page."""
+    from html import escape
+
+    props = PAGES.get(page_path, {})
+    basic = {"jcr:title": props.get("jcr:title", "")}
+    advanced = {k: v for k, v in props.items() if k not in basic and isinstance(v, str)}
+
+    def fields(values):
+        return "".join(
+            f"<div class='coral-Form-fieldwrapper' style='margin:12px 0'><label style='display:block;font:13px sans-serif;"
+            f"color:#555'>{escape(k)}</label><input name='./{escape(k)}' value='{escape(v)}' "
+            f"style='width:640px;padding:6px;font:14px sans-serif'></div>"
+            for k, v in values.items()
+        )
+
+    return (
+        "<!doctype html><html><head><title>Page Properties (sample)</title></head>"
+        "<body style='font:14px sans-serif;margin:24px'>"
+        f"<h2 style='margin:0 0 12px'>Page Properties: {escape(page_path)} (sample)</h2>"
+        "<coral-tablist style='display:flex;gap:16px;border-bottom:1px solid #ccc;padding-bottom:6px'>"
+        "<coral-tab onclick='show(0)' style='cursor:pointer'>Basic</coral-tab>"
+        "<coral-tab onclick='show(1)' style='cursor:pointer'>Advanced</coral-tab></coral-tablist>"
+        f"<coral-panelstack><coral-panel>{fields(basic)}</coral-panel>"
+        f"<coral-panel style='display:none'>{fields(advanced)}</coral-panel></coral-panelstack>"
+        "<script>function show(i){document.querySelectorAll('coral-panel')"
+        ".forEach((p,n)=>p.style.display=n===i?'':'none')}</script></body></html>"
+    )
+
+
+def serve_author_ui(context):
+    """Playwright route handler serving the sample author UI (mock mode)."""
+    def handle(route):
+        url = urlsplit(route.request.url)
+        if url.path == "/mnt/overlay/wcm/core/content/sites/properties.html":
+            route.fulfill(status=200, content_type="text/html",
+                          body=_dialog(dict(parse_qsl(url.query)).get("item", "")))
+        else:
+            route.fulfill(status=200, body=b"")
+
+    context.route("**/*", handle)
+

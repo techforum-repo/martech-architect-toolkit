@@ -9,10 +9,12 @@ from urllib.parse import urlsplit
 import pandas as pd
 import streamlit as st
 
-from .. import aem_mock, database, mock_scan, site_credentials
+from .. import aem_lookup, aem_mock, database, mock_scan, site_credentials
+from ..aem_screens import AemLoginRequired, capture_page_properties
+from ..errors import friendly_error
 from ..config import settings
 from ..detection import EXPECTED_BEFORE_CONSENT, aem_code_folders, consent_violations
-from ..investigation import analyze_target, run_investigation
+from ..investigation import analyze_target, environment_token, run_investigation
 from ..report import build_report, dot_graph, html_report, request_graph, requests_csv, stage_label
 from ..site_config import load, match
 from ..targets import available_targets
@@ -220,6 +222,69 @@ def _groovy_hint(result: dict, target: str) -> None:
     )
 
 
+def _properties_pages(result: dict, analysis: dict) -> list[str]:
+    """The scanned page, then any page whose own properties matched the search."""
+    pages = [result["aem_page"]["content_path"]]
+    for entry in analysis["aem_references"]:
+        for hit in entry["hits"]:
+            if hit["node_path"].endswith("/jcr:content"):
+                pages.append(hit["page_path"])
+    return list(dict.fromkeys(pages))
+
+
+def _properties_screenshot(result: dict, analysis: dict, target: str) -> None:
+    st.subheader("Page Properties screenshot")
+    st.caption("Opens Page Properties on author with your token and highlights the fields that contain "
+               "the target. Read-only: the browser blocks every write request and clicks only dialog tabs.")
+    if not target.strip():
+        st.info("Choose or type a target above.")
+        return
+    environment = result["environment"]
+    page = st.selectbox("Page", _properties_pages(result, analysis), key="properties_page")
+    if st.button("Screenshot Page Properties in AEM"):
+        auth = environment_token(environment, st.session_state["session_aem_tokens"])
+        if not auth.get("token"):
+            st.warning("AEM token unavailable: " + auth["message"])
+            return
+        with st.spinner("Opening Page Properties on author..."):
+            try:
+                st.session_state["properties_capture"] = {
+                    "key": (page, target),
+                    "result": capture_page_properties(
+                        environment["author_base"], page, target.strip(), auth["token"],
+                        show_browser=settings.show_browser,
+                        prepare_context=aem_mock.serve_author_ui if aem_lookup.is_mock(environment) else None),
+                }
+            except AemLoginRequired as exc:
+                st.session_state["properties_capture"] = None
+                show_error({"title": "AEM showed its sign-in page", "reasons": [
+                    str(exc),
+                    "This author accepts the token for data lookups but not for its UI pages",
+                    "Tell the developer: the app can add a one-time browser sign-in for screenshots",
+                ]})
+                return
+            except Exception as exc:  # noqa: BLE001 - shown to the user as a friendly error
+                st.session_state["properties_capture"] = None
+                error = friendly_error(exc)
+                show_error({"title": "Screenshot failed: " + error.title, "reasons": error.reasons})
+                return
+
+    capture = st.session_state.get("properties_capture")
+    if not capture or capture["key"] != (page, target):
+        return
+    shot = capture["result"]
+    if not shot["fields"]:
+        st.info(f"No field in this page's properties contains “{target}”. The dialog as opened:")
+        st.image(shot["page_image"], width="stretch")
+    for index, field in enumerate(shot["fields"], 1):
+        st.image(field["image"], width="stretch",
+                 caption=f"{field['label'] or field['name']} = {field['value'][:120]}")
+        st.download_button("Download screenshot", field["image"], f"page-properties-{index}.png", "image/png",
+                           key=f"properties_download_{index}")
+    if shot["blocked_writes"]:
+        st.caption(f"{len(shot['blocked_writes'])} write request(s) from the author UI were blocked.")
+
+
 def _aem_tab(result: dict, analysis: dict, target: str, searched: bool) -> None:
     page = result.get("aem_page")
     stage = result["stages"].get("aem", {})
@@ -253,6 +318,10 @@ def _aem_tab(result: dict, analysis: dict, target: str, searched: bool) -> None:
         code = [e for e in analysis["aem_references"] if e["root"] == "/apps" or e["scope"] == "Site code"]
         if not code or not any(e["hits"] for e in code):
             _groovy_hint(result, target)
+
+    if page["status"] == "found":
+        st.divider()
+        _properties_screenshot(result, analysis, target)
 
 
 def _report_tab(result: dict, browser: dict, analysis: dict, target: str) -> None:

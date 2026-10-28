@@ -101,22 +101,22 @@ which is a quick way to check what your AEM user may call:
     --prefix /us/en --root /content/your-site/us/en --term tracking.your-vendor.com
 ```
 
-### Page Properties screenshots (spike)
+### Page Properties screenshots
 
-`scripts/aem_screenshot_spike.py` opens a page's Page Properties on author
-with your token, finds the fields containing a value (on any dialog tab), and
-saves a screenshot of each with the field highlighted under `data/screenshots/`:
-
-```bash
-.venv/bin/python scripts/aem_screenshot_spike.py \
-    --author https://author-pXXXX-eYYYY.adobeaemcloud.com \
-    --page /content/your-site/us/en/home --term tracking.your-vendor.com
-```
+In the **AEM** tab, **Screenshot Page Properties in AEM** opens Page
+Properties on author for the scanned page, or a parent page whose properties
+matched the search, with your token. It finds the fields containing the
+target on any dialog tab and shows a screenshot of each, with the field
+highlighted. In mock mode it uses a sample dialog.
 
 The author UI runs its own scripts, so the browser is locked down: every
 request that isn't a read is blocked, the token is attached only to requests
-to your author, and nothing is clicked except dialog tabs. It will be added to
-the app once it's confirmed against a real author.
+to your author, and nothing is clicked except dialog tabs. If your author
+sends the browser to its sign-in page (the token isn't accepted for UI
+pages), the app says so.
+
+`scripts/aem_screenshot_spike.py` does the same from the command line and
+saves the images under `data/screenshots/`.
 
 ## Scanning notes
 
