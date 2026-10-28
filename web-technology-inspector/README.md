@@ -101,6 +101,23 @@ which is a quick way to check what your AEM user may call:
     --prefix /us/en --root /content/your-site/us/en --term tracking.your-vendor.com
 ```
 
+### Page Properties screenshots (spike)
+
+`scripts/aem_screenshot_spike.py` opens a page's Page Properties on author
+with your token, finds the fields containing a value (on any dialog tab), and
+saves a screenshot of each with the field highlighted under `data/screenshots/`:
+
+```bash
+.venv/bin/python scripts/aem_screenshot_spike.py \
+    --author https://author-pXXXX-eYYYY.adobeaemcloud.com \
+    --page /content/your-site/us/en/home --term tracking.your-vendor.com
+```
+
+The author UI runs its own scripts, so the browser is locked down: every
+request that isn't a read is blocked, the token is attached only to requests
+to your author, and nothing is clicked except dialog tabs. It will be added to
+the app once it's confirmed against a real author.
+
 ## Scanning notes
 
 - **Bot protection.** Sites behind Akamai, Cloudflare and similar often block
