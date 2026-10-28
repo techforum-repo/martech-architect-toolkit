@@ -17,6 +17,12 @@
     ],
     "default": "generic-excel"
   },
+  "find-text-references": {
+    "formatters": [
+      "generic-excel"
+    ],
+    "default": "generic-excel"
+  },
   "page-report": {
     "formatters": [
       "generic-excel"

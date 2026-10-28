@@ -114,6 +114,15 @@ Bundled scripts:
   type filter inside the query and `OPTION(TRAVERSAL FAIL)` so AEM refuses
   rather than crawls if no index fits.
 
+- `find-text-references`: where a domain, script URL, tracking ID or other
+  text appears under a path: inside files (clientlib JavaScript, HTL, CSS,
+  JSON; case-insensitive, with line numbers) and in node properties. AEM's
+  full-text search doesn't cover file contents under `/apps`, so this walks the
+  tree; point it at `/apps/<project>`, `/conf/<site>` or a site subtree. Files
+  over 2 MB are skipped and counted, and the DAM, launches and user-generated
+  content are skipped by default. The Web Technology Inspector suggests it when
+  its `/apps` search finds nothing.
+
 - `audit-events`: the AEM audit log for pages **and** assets under a path:
   who created, modified, moved, deleted or published what, and when (newest
   first). It's the team's console page-audit script, converted and extended.

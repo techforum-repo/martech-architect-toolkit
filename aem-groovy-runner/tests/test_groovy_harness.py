@@ -370,3 +370,37 @@ def test_audit_single_page_or_asset_only(classes, tmp_path):
     assert [(r["Path"], r["Event Type"]) for r in rows] == [(f"{SITE}/stents", "PageModified")]  # not stent-a
     rows, _, _ = _run_audit(classes, tmp_path, {"basePath": [f"{DAM}/a.pdf"], "scope": ONLY_ITSELF})
     assert [r["Event Type"] for r in rows] == ["Activate", "METADATA_UPDATED"]
+
+
+def _run_code(classes, tmp_path, values):
+    script = SCRIPTS["find-text-references"]
+    [(_, _, config)] = expand_runs(script, values)
+    path = tmp_path / "script.groovy"
+    path.write_text(readonly.prepare(build_script(script.template(), config)))
+    proc = subprocess.run(["java", "-cp", f"{JARS}:{classes}", "groovy.ui.GroovyMain",
+                           str(HARNESS / "CodeHarness.groovy"), str(path)], capture_output=True, text=True, check=True)
+    return split_payload(parse_output(proc.stdout))
+
+
+def test_find_text_references_files_properties_and_limits(classes, tmp_path):
+    rows, meta = _run_code(classes, tmp_path, {"rootPath": ["/apps/acme"], "text": "tracking.example.com",
+                                               "excludedPaths": ["/apps/acme/archive"]})
+    found = [(r["Path"].rsplit("/", 1)[-1], r["Where"], r["Property"], r["Line"]) for r in rows]
+    assert found == [
+        ("tracking.js", "File content", "", 3),
+        ("customheaderlibs.html", "File content", "", 2),  # case-insensitive
+        ("embed", "Property", "defaultUrl", ""),
+        ("embed", "Property", "hosts", ""),  # multi-value property
+    ]
+    assert "load('https://tracking.example.com/t.js');" in rows[0]["Snippet"]
+    # huge.js is over 2 MB and skipped; logo.png isn't a text type; archive is excluded.
+    assert (meta["skippedLargeFiles"], meta["filesRead"], meta["truncated"]) == (1, 3, False)
+
+    rows, meta = _run_code(classes, tmp_path, {"rootPath": ["/apps/acme"], "text": "tracking.example.com",
+                                               "maxResults": 1})
+    assert len(rows) == 1 and meta["truncated"] is True
+
+
+def test_find_text_references_missing_path(classes, tmp_path):
+    _, meta = _run_code(classes, tmp_path, {"rootPath": ["/apps/nope"], "text": "x"})
+    assert "Path not found" in meta["error"]

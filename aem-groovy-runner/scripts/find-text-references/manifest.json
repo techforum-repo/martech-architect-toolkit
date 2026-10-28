@@ -1,0 +1,52 @@
+{
+  "name": "Find Text References",
+  "description": "Find where a domain, script URL, tracking ID or other text appears under a path: inside files (clientlib JavaScript, HTL, CSS, JSON) and in node properties. Use it when full-text search can't see code under /apps. It reads every node under the path, so point it at /apps/<project>, /conf/<site> or a site subtree, not all of /content.",
+  "inputs": [
+    {
+      "key": "rootPath",
+      "label": "Paths to search \u2014 one per line (each produces its own file)",
+      "type": "path_list",
+      "iterate": true,
+      "required": true,
+      "placeholder": "/apps/acme\n/conf/acme"
+    },
+    {
+      "key": "text",
+      "label": "Text to find (case-insensitive)",
+      "type": "text",
+      "required": true,
+      "placeholder": "tracking.example.com"
+    },
+    {
+      "key": "fileExtensions",
+      "label": "File types to read \u2014 one per line (empty = .js .html .css .json .jsp .txt .xml)",
+      "type": "string_list",
+      "advanced": true,
+      "placeholder": ".js\n.html"
+    },
+    {
+      "key": "maxResults",
+      "label": "Max rows (0 = no limit)",
+      "type": "number",
+      "default": 500,
+      "advanced": true
+    },
+    {
+      "key": "excludedPaths",
+      "label": "Excluded paths \u2014 one per line",
+      "type": "path_list",
+      "advanced": true
+    }
+  ],
+  "batch": false,
+  "systemExcludes": {
+    "input": "excludedPaths",
+    "paths": [
+      "/content/dam",
+      "/content/launches",
+      "/content/usergenerated",
+      "/content/communities",
+      "/content/projects"
+    ]
+  }
+}
