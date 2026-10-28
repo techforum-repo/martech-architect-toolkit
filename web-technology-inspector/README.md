@@ -32,8 +32,9 @@ Chromium browser used for scans, copies `.env.example` to `.env`, and opens the
 app on the first free port from 8502.
 
 The app starts in **mock mode**: a sample scan and sample AEM data, so every
-page can be tried without a website or AEM token. Turn it off in the sidebar,
-or set `MOCK_MODE=false` in `.env`.
+page can be tried without a website or AEM sign-in. Turn it off in the
+sidebar; the choice is remembered on this machine (`data/preferences.json`)
+across refreshes and restarts. `MOCK_MODE` in `.env` is only the first-start default.
 
 ## Set up for your sites
 
@@ -160,6 +161,7 @@ saves the images under `data/screenshots/`.
 |---|---|
 | `config/` | AEM environments and website mappings (JSON, not committed) |
 | `data/inspector.db` | Scan history: technologies, domains, cookie names, consent findings. Never cookie values, inline code or screenshots |
+| `data/preferences.json` | Remembered UI choices, e.g. mock mode on or off |
 | `logs/` | Rotating application log |
 
 Files are restricted to your user on Linux and macOS.

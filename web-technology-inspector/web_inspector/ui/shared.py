@@ -5,7 +5,7 @@ web_inspector/ui/*. Page-specific rendering stays in that page's own module."""
 
 import streamlit as st
 
-from .. import VERSION, aem_lookup, aem_mock
+from .. import VERSION, aem_lookup, aem_mock, preferences
 from ..aem_screens import SignInIncomplete, sign_in
 from ..config import settings
 from ..errors import FriendlyError, friendly_error
@@ -20,7 +20,8 @@ CUSTOM_CSS = """<style>
 
 def init_session_state() -> None:
     defaults = {
-        "mock_mode": settings.mock_mode,
+        # Last choice made in the sidebar, else MOCK_MODE from .env.
+        "mock_mode": preferences.get("mock_mode", settings.mock_mode),
         # Session-only AEM tokens, keyed by "<environment id>|<author URL>".
         "session_aem_tokens": {},
         # Session-only Basic-auth credentials for websites, keyed by domain.
@@ -49,6 +50,7 @@ def render_sidebar() -> str:
         )
         if mock != st.session_state["mock_mode"]:
             st.session_state["mock_mode"] = mock
+            preferences.set("mock_mode", mock)
             st.session_state["result"] = None
             st.session_state["analysis_cache"] = {}
         if mock:
