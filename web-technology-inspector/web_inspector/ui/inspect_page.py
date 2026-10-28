@@ -304,9 +304,17 @@ def _capture(result: dict, page: str, target: str) -> dict:
             environment["author_base"], page, target.strip(), token, storage_state=ui_session,
             show_browser=settings.show_browser,
             prepare_context=aem_mock.serve_author_ui if mock else None)}
-    except AemLoginRequired:
-        st.session_state["aem_ui_sessions"].pop(environment["id"], None)  # expired or never worked
-        return {"page": page, "sign_in": True}
+    except AemLoginRequired as exc:
+        if not exc.sign_in_page:
+            # Not a sign-in problem: author sent the browser elsewhere. Keep the sign-in.
+            return {"page": page, "error": {"title": "Page Properties opened a different page", "reasons": [
+                f"Landed on {exc.landed}" + (f" (“{exc.title}”)" if exc.title else ""),
+                "Your author may open its UI inside the Adobe Experience Cloud shell instead of on the "
+                "author address. Send this message to the developer to adjust the screenshot address.",
+            ]}}
+        if ui_session:
+            st.session_state["aem_ui_sessions"].pop(environment["id"], None)  # the sign-in has ended
+        return {"page": page, "sign_in": True, "landed": exc.landed, "title": exc.title}
     except Exception as exc:  # noqa: BLE001 - shown to the user as a friendly error
         error = friendly_error(exc)
         return {"page": page, "error": {"title": error.title, "reasons": error.reasons}}
@@ -367,8 +375,12 @@ def _properties_screenshot(result: dict, analysis: dict, target: str, key: tuple
     current = captures if captures and captures["key"] == key else None
 
     if current and any(item.get("sign_in") for item in current["items"]):
-        st.warning("AEM needs a sign-in for screenshots. Use **Sign in to AEM** at the top of the page; "
-                   "the screenshots are taken right after.")
+        item = next(item for item in current["items"] if item.get("sign_in"))
+        landed = f" It opened {item['landed']}" + (f" (“{item['title']}”)." if item.get("title") else ".") \
+            if item.get("landed") else ""
+        st.warning("AEM showed a sign-in page instead of Page Properties, so the sign-in has ended or isn't "
+                   f"accepted for its UI.{landed} Use **Sign in to AEM** at the top of the page; the screenshots "
+                   "are taken right after.")
         return
 
     if current:

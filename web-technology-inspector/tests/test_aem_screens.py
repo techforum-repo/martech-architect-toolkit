@@ -81,9 +81,35 @@ class PagePropertiesCaptureTests(unittest.TestCase):
         self.assertTrue(result["page_image"].startswith(b"\x89PNG"))
 
     def test_login_redirect_is_reported(self):
-        with self.assertRaises(AemLoginRequired):
+        with self.assertRaises(AemLoginRequired) as raised:
             capture_page_properties(AUTHOR, "/content/site/us/en/products", "x", TOKEN,
                                     prepare_context=fixture([], login=True))
+        self.assertTrue(raised.exception.sign_in_page)
+        self.assertEqual(raised.exception.landed, "https://ims.example.test/ims/login")
+
+    def test_redirect_elsewhere_is_not_a_sign_in(self):
+        def shell(context):
+            def handle(route):
+                if route.request.url.startswith(AUTHOR):
+                    route.fulfill(status=200, content_type="text/html",
+                                  body="<script>location.href='https://experience.example.test/#/aem/sites'</script>")
+                else:
+                    route.fulfill(status=200, content_type="text/html", body="<title>Experience Cloud</title>")
+            context.route("**/*", handle)
+        with self.assertRaises(AemLoginRequired) as raised:
+            capture_page_properties(AUTHOR, "/content/site/us/en/products", "x", TOKEN, prepare_context=shell)
+        self.assertFalse(raised.exception.sign_in_page)
+        self.assertEqual((raised.exception.landed, raised.exception.title),
+                         ("https://experience.example.test/#/aem/sites", "Experience Cloud"))
+
+    def test_sign_in_page_detection(self):
+        from web_inspector.aem_screens import _is_sign_in_page
+        for url in ("https://ims-na1.adobelogin.com/ims/authorize",
+                    AUTHOR + "/libs/granite/core/content/login.html", AUTHOR + "/j_security_check"):
+            self.assertTrue(_is_sign_in_page(url), url)
+        for url in (AUTHOR + "/mnt/overlay/wcm/core/content/sites/properties.html?item=/content/site/login",
+                    "https://author-p1-e2.adobeaemcloud.com/aem/start.html"):
+            self.assertFalse(_is_sign_in_page(url), url)
 
 
 @unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")

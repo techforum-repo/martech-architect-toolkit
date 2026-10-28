@@ -63,7 +63,30 @@ SHOW_FIELD_SCRIPT = """([marker, tab]) => {
 
 
 class AemLoginRequired(RuntimeError):
-    """Author redirected to its login page: the token or sign-in isn't accepted for UI pages."""
+    """Page Properties didn't open on author: it went to a sign-in page, or elsewhere.
+
+    landed: where the browser ended up. sign_in_page: True when that looks
+    like a sign-in page (the session isn't accepted or has ended), False when
+    author sent the browser somewhere else (e.g. the Experience Cloud shell).
+    """
+
+    def __init__(self, message: str, *, landed: str = "", title: str = "", sign_in_page: bool = True):
+        super().__init__(message)
+        self.landed = landed
+        self.title = title
+        self.sign_in_page = sign_in_page
+
+
+def _is_sign_in_page(url: str) -> bool:
+    """An Adobe sign-in host, or AEM's own login path; never decided by the
+    page path being opened (passed in the query string)."""
+    parts = urlsplit(url.lower())
+    return (
+        "adobelogin." in parts.netloc
+        or parts.netloc.startswith(("ims-", "ims."))
+        or "/login" in parts.path
+        or "j_security_check" in parts.path
+    )
 
 
 class SignInIncomplete(RuntimeError):
@@ -72,7 +95,7 @@ class SignInIncomplete(RuntimeError):
 
 def _signed_in(page, context, author_base: str) -> bool:
     author_host = urlsplit(author_base).hostname
-    on_author = page.url.lower().startswith(author_base.lower().rstrip("/")) and "login" not in page.url.lower()
+    on_author = page.url.lower().startswith(author_base.lower().rstrip("/")) and not _is_sign_in_page(page.url)
     has_session = any(
         c["name"] == "login-token" and author_host.endswith(c["domain"].lstrip("."))
         for c in context.cookies()
@@ -164,8 +187,12 @@ def capture_page_properties(author_base: str, page_path: str, term: str, token: 
             page.wait_for_timeout(500)  # a sign-in redirect may happen in script
 
             landed = page.url.lower()
-            if "login" in landed or "ims" in urlsplit(landed).netloc or not landed.startswith(author_base.lower()):
-                raise AemLoginRequired(f"Author showed its sign-in page instead ({page.url.split('?')[0]})")
+            sign_in_page = _is_sign_in_page(landed)
+            if sign_in_page or not landed.startswith(author_base.lower().rstrip("/")):
+                where = page.url.split("?")[0]
+                raise AemLoginRequired(
+                    f"Page Properties opened {'a sign-in page' if sign_in_page else 'a different page'} "
+                    f"instead: {where}", landed=where, title=page.title(), sign_in_page=sign_in_page)
 
             fields = page.evaluate(FIND_FIELDS_SCRIPT, term)
             captured = []
