@@ -23,6 +23,8 @@ MAPPING = {
 PAGES = {
     "/content/example/us/en": {
         "jcr:title": "Home",
+        # Inherited by child pages, e.g. read by the page component.
+        "analyticsTrackingDomain": "tracking.example.com",
         "cq:template": "/conf/example/settings/wcm/templates/page-content",
         "sling:resourceType": "example/components/page",
     },
@@ -39,6 +41,13 @@ PAGES = {
     },
 }
 
+# Experience fragment variations each page references (fragmentVariationPath).
+FRAGMENTS = {
+    "/content/example/us/en/products": [
+        "/content/experience-fragments/example/us/en/site/footer/master",
+    ],
+}
+
 # Nodes whose properties mention a searchable value.
 REFERENCES = {
     "tracking.example.com": [
@@ -50,6 +59,11 @@ REFERENCES = {
             "/content/experience-fragments/example/us/en/site/footer/master"
             "/jcr:content/root/html",
             "example/components/html",
+        ),
+        # On another page: found by the whole-repository search, not the page scope.
+        (
+            "/content/example/us/en/campaigns/spring-sale/jcr:content/root/embed",
+            "core/wcm/components/embed/v2/embed",
         ),
         (
             "/conf/example/settings/wcm/policies/example/components/page"
@@ -72,6 +86,14 @@ class MockResponse:
 def _querybuilder(parameters):
     root = parameters.get("path", "")
     limit = int(parameters.get("p.limit", "20"))
+
+    if parameters.get("property") == "fragmentVariationPath":
+        page = root[: -len("/jcr:content")] if root.endswith("/jcr:content") else root
+        hits = [
+            {"jcr:path": page + "/jcr:content/root/xf", "fragmentVariationPath": fragment}
+            for fragment in FRAGMENTS.get(page, [])
+        ]
+        return {"success": True, "results": len(hits), "total": len(hits), "more": False, "hits": hits}
 
     if parameters.get("property") == "sling:vanityPath":
         wanted = parameters.get("property.value", "")

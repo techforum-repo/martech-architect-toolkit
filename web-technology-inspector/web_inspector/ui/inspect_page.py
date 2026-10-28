@@ -181,12 +181,18 @@ def _target_picker(browser: dict) -> str:
     return next(t["value"] for t in targets if t["label"] == choice)
 
 
-def _analysis(result: dict, target: str, search_aem: bool) -> dict:
-    key = (result["timestamp"], target, search_aem)
+SCOPES = {
+    "This page and what it uses": "page",
+    "Whole repository (/content, /conf, /apps)": "repository",
+}
+
+
+def _analysis(result: dict, target: str, search_aem: bool, scope: str) -> dict:
+    key = (result["timestamp"], target, search_aem, scope)
     cache = st.session_state["analysis_cache"]
     if key not in cache:
         cache[key] = analyze_target(result, target, session_tokens=st.session_state["session_aem_tokens"],
-                                    search_aem=search_aem)
+                                    search_aem=search_aem, scope=scope)
     return cache[key]
 
 
@@ -231,20 +237,21 @@ def _aem_tab(result: dict, analysis: dict, target: str, searched: bool) -> None:
     if not target.strip():
         st.info("Choose or type a target above.")
     elif not searched:
-        st.info("Click “Search AEM” above to look for the target under /content, /conf and /apps.")
+        st.info("Choose a scope and click “Search AEM” above.")
     else:
-        for root in analysis["aem_references"]:
-            st.markdown(f"**{root['root']}**: {root['total']} hit(s)"
-                        + ("" if root["status"] != "error" else f", {root['message']}"))
-            if root["hits"]:
+        for entry in analysis["aem_references"]:
+            where = entry["scope"] if entry["scope"] == entry["root"] else f"{entry['scope']} · `{entry['root']}`"
+            st.markdown(f"**{where}**: {entry['total']} hit(s)"
+                        + ("" if entry["status"] != "error" else f", {entry['message']}"))
+            if entry["hits"]:
                 st.dataframe(pd.DataFrame([
                     {"Node": h["node_path"], "Page": h["page_path"], "Component": h["resource_type"]}
-                    for h in root["hits"]
+                    for h in entry["hits"]
                 ]), width="stretch", hide_index=True)
         st.caption("A reference shows where the value is stored, not proof that it caused a request. "
                    "Full-text search depends on the AEM index; code in /apps may not be indexed.")
-        apps = next((r for r in analysis["aem_references"] if r["root"] == "/apps"), None)
-        if apps and not apps["hits"]:
+        code = [e for e in analysis["aem_references"] if e["root"] == "/apps" or e["scope"] == "Site code"]
+        if not code or not any(e["hits"] for e in code):
             _groovy_hint(result, target)
 
 
@@ -285,12 +292,20 @@ def render() -> None:
 
     st.divider()
     target = _target_picker(browser)
-    searched = st.button("Search AEM", disabled=not (target.strip() and result.get("aem_page")),
-                         help="Search /content, /conf and /apps on author for this target")
+    page_found = (result.get("aem_page") or {}).get("status") == "found"
+    col1, col2 = st.columns([3, 1])
+    scope_label = col1.radio(
+        "Search scope", list(SCOPES) if page_found else list(SCOPES)[1:], horizontal=True,
+        help="This page: its components, the experience fragments it uses, its parent pages' "
+             "properties, its template and site policies, and its code folder.",
+    )
+    scope = SCOPES[scope_label]
+    searched = col2.button("Search AEM", disabled=not (target.strip() and result.get("aem_page")),
+                           help="Read-only search on author for this target")
     if searched:
-        st.session_state["aem_searched"] = (result["timestamp"], target)
-    search_aem = st.session_state.get("aem_searched") == (result["timestamp"], target)
-    analysis = _analysis(result, target, search_aem)
+        st.session_state["aem_searched"] = (result["timestamp"], target, scope)
+    search_aem = st.session_state.get("aem_searched") == (result["timestamp"], target, scope)
+    analysis = _analysis(result, target, search_aem, scope)
 
     tabs = st.tabs(["Technologies", "Third parties", "Consent & cookies", "How it was added",
                     "AEM", "Dependency graph", "Screenshot", "Report"])

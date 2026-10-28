@@ -41,8 +41,13 @@ class InvestigationTests(unittest.TestCase):
     def test_analyze_target_with_aem_references(self):
         analysis = analyze_target(run(), "tracking.example.com")
         self.assertEqual(analysis["findings"][0]["source"], "Adobe Tags")
+        scopes = [r["scope"] for r in analysis["aem_references"]]
+        self.assertEqual(scopes[0], "This page")  # page scope is the default
+        self.assertIn("Site code", scopes)  # /apps/example, from the page's /etc.clientlibs URLs
+
+        analysis = analyze_target(run(), "tracking.example.com", scope="repository")
         totals = {r["root"]: r["total"] for r in analysis["aem_references"]}
-        self.assertEqual(totals, {"/content": 2, "/conf": 1, "/apps": 0})
+        self.assertEqual(totals, {"/content": 3, "/conf": 1, "/apps": 0})
         self.assertEqual(analyze_target(run(), "x", search_aem=False)["aem_references"], [])
 
 

@@ -103,7 +103,7 @@ class TestMockLookups(unittest.TestCase):
                 self.environment, "tracking.example.com", "t"
             )
         }
-        self.assertEqual(results["/content"]["total"], 2)
+        self.assertEqual(results["/content"]["total"], 3)
         self.assertEqual(results["/conf"]["total"], 1)
         self.assertEqual(results["/apps"]["status"], "not_found")
         self.assertEqual(
@@ -154,3 +154,50 @@ class TestRealModeErrors(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPageScope(unittest.TestCase):
+    def setUp(self):
+        self.environment = aem_mock.ENVIRONMENT
+        self.page = aem_lookup.verify_page(self.environment, "/content/example/us/en/products", "t")
+
+    def search(self, term="tracking.example.com", folders=("/apps/example",)):
+        return {e["scope"]: e for e in aem_lookup.search_page_scope(self.environment, self.page, term, "t", folders)}
+
+    def test_scopes_and_hits(self):
+        results = self.search()
+        self.assertEqual(list(results), ["This page", "Experience fragment", "Inherited from parent pages",
+                                         "Page template", "Site policies", "Site code"])
+        self.assertEqual(results["This page"]["root"], "/content/example/us/en/products/jcr:content")
+        self.assertEqual(results["This page"]["total"], 1)
+        self.assertEqual(results["Experience fragment"]["root"],
+                         "/content/experience-fragments/example/us/en/site/footer/master")
+        self.assertEqual(results["Experience fragment"]["total"], 1)
+        inherited = results["Inherited from parent pages"]["hits"]
+        self.assertEqual([(h["page_path"], h["resource_type"]) for h in inherited],
+                         [("/content/example/us/en", "property analyticsTrackingDomain")])
+        self.assertEqual(results["Site policies"]["root"], "/conf/example/settings/wcm/policies")
+        self.assertEqual(results["Site policies"]["total"], 1)
+
+    def test_page_scope_excludes_other_pages(self):
+        # The whole-repository search also finds nodes the page doesn't use; page scope must not.
+        everything = {h["node_path"] for e in aem_lookup.search_references(self.environment, "tracking.example.com", "t")
+                      for h in e["hits"]}
+        scoped = {h["node_path"] for e in self.search().values() for h in e["hits"]}
+        self.assertTrue(scoped)
+        self.assertTrue(all(p.startswith(("/content/example/us/en/products/", "/content/experience-fragments/",
+                                          "/content/example/us/en/jcr:content", "/conf/example/"))
+                            for p in scoped), scoped)
+        self.assertLessEqual(len(scoped - everything), 1)  # only the inherited property is extra
+        self.assertIn("/content/example/us/en/campaigns/spring-sale/jcr:content/root/embed", everything)
+        self.assertNotIn("/content/example/us/en/campaigns/spring-sale/jcr:content/root/embed", scoped)
+
+    def test_ancestors(self):
+        self.assertEqual(aem_lookup._ancestors("/content/site/us/en/products"),
+                         ["/content/site", "/content/site/us", "/content/site/us/en"])
+
+    def test_operation_is_restricted(self):
+        url = aem_lookup.querybuilder_url(self.environment, [
+            ("path", "/content"), ("property", "x"), ("property.operation", "like")])
+        with self.assertRaises(AEMSecurityError):
+            validate_request("GET", url, {("https", "author-p00000-e000000.adobeaemcloud.com")})

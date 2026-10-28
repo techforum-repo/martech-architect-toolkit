@@ -71,11 +71,20 @@ before anything is sent:
 |---|---|
 | Find the page | Prefix mapping, then `<path>/jcr:content.json` (one node) to confirm it exists |
 | Vanity URLs | QueryBuilder search on `sling:vanityPath` when the mapping misses |
-| References | QueryBuilder full-text search under `/content`, `/conf` and `/apps` |
+| References | QueryBuilder full-text search, in one of two scopes (below) |
 
-QueryBuilder calls may only use an allowlist of 8 parameters, only under those
-three roots, and return at most 100 results. Redirects are never followed with
-a token.
+**Search scope** for references:
+
+- **This page and what it uses** (default): the page's own components
+  (`<page>/jcr:content`, not its child pages), each experience fragment it
+  references, its parent pages' own properties (one node read each), its
+  template and its site's policies under `/conf`, and its `/apps/<project>`
+  code folder, taken from the page's `/etc.clientlibs/<project>/` URLs.
+- **Whole repository**: all of `/content`, `/conf` and `/apps`.
+
+QueryBuilder calls may only use an allowlist of 9 parameters
+(`property.operation` only as `exists`), only under those three roots, and
+return at most 100 results. Redirects are never followed with a token.
 
 Full-text search doesn't cover code files under `/apps`. When the `/apps`
 search finds nothing, the app suggests the **Find Text References** script in

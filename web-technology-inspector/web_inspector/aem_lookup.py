@@ -157,46 +157,130 @@ def find_vanity(environment, published_path, token, root="/content"):
     }
 
 
+def _fulltext(environment, root, term, token, limit=20, scope=""):
+    """One QueryBuilder full-text search under root, as a result entry."""
+    status, payload, message = _get_json(
+        environment,
+        querybuilder_url(environment, [
+            ("path", root),
+            # Quoted, so a domain or URL is searched as one phrase.
+            ("fulltext", '"' + term.replace('"', "") + '"'),
+            ("p.limit", str(limit)),
+            ("p.hits", "selective"),
+            ("p.properties", "jcr:path sling:resourceType"),
+        ]),
+        token,
+    )
+    entry = {"scope": scope or root, "root": root, "http_status": status, "message": message}
+
+    if payload is None:
+        return dict(entry, status="error", total=0, hits=[])
+
+    hits = [
+        {
+            "node_path": hit.get("jcr:path", ""),
+            "page_path": _page_path(hit.get("jcr:path", "")),
+            "resource_type": hit.get("sling:resourceType", ""),
+        }
+        for hit in payload.get("hits", [])
+        if hit.get("jcr:path")
+    ]
+    return dict(entry, status="found" if hits else "not_found",
+                total=payload.get("total", len(hits)), hits=hits)
+
+
 def search_references(environment, term, token, roots=QUERYBUILDER_ROOTS, limit=20):
-    """Full-text search each root for nodes that mention the term."""
+    """Full-text search each whole root (/content, /conf, /apps) for the term."""
+    return [_fulltext(environment, root, term, token, limit) for root in roots]
 
-    results = []
 
-    for root in roots:
-        status, payload, message = _get_json(
-            environment,
-            querybuilder_url(environment, [
-                ("path", root),
-                # Quoted, so a domain or URL is searched as one phrase.
-                ("fulltext", '"' + term.replace('"', "") + '"'),
-                ("p.limit", str(limit)),
-                ("p.hits", "selective"),
-                ("p.properties", "jcr:path sling:resourceType"),
-            ]),
-            token,
-        )
+MAX_FRAGMENTS = 10
+MAX_ANCESTORS = 8
 
-        if payload is None:
-            results.append({"root": root, "status": "error", "http_status": status,
-                            "message": message, "total": 0, "hits": []})
-            continue
 
-        hits = [
-            {
-                "node_path": hit.get("jcr:path", ""),
-                "page_path": _page_path(hit.get("jcr:path", "")),
-                "resource_type": hit.get("sling:resourceType", ""),
-            }
-            for hit in payload.get("hits", [])
-            if hit.get("jcr:path")
-        ]
-        results.append({
-            "root": root,
-            "status": "found" if hits else "not_found",
-            "http_status": status,
-            "message": message,
-            "total": payload.get("total", len(hits)),
-            "hits": hits,
-        })
+def fragments_used(environment, page_path, token):
+    """Experience fragment variations the page references."""
+    status, payload, _ = _get_json(
+        environment,
+        querybuilder_url(environment, [
+            ("path", page_path + "/jcr:content"),
+            ("property", "fragmentVariationPath"),
+            ("property.operation", "exists"),
+            ("p.limit", "50"),
+            ("p.hits", "selective"),
+            ("p.properties", "fragmentVariationPath"),
+        ]),
+        token,
+    )
+    if payload is None:
+        return []
+    paths = [
+        hit.get("fragmentVariationPath", "")
+        for hit in payload.get("hits", [])
+    ]
+    return list(dict.fromkeys(
+        p for p in paths if isinstance(p, str) and p.startswith("/content/")
+    ))[:MAX_FRAGMENTS]
+
+
+def _ancestors(page_path):
+    """Parent pages from the site root down, e.g. /content/site, /content/site/us."""
+    parts = page_path.strip("/").split("/")
+    return ["/" + "/".join(parts[:depth]) for depth in range(2, len(parts))][-MAX_ANCESTORS:]
+
+
+def inherited_properties(environment, page_path, term, token):
+    """Parent pages' own properties that mention the term (one node read each)."""
+    lowered = term.lower()
+    hits = []
+    for ancestor in _ancestors(page_path):
+        status, node, _ = _get_json(environment, page_node_url(environment, ancestor), token)
+        if node is None:
+            continue  # not a page, or not readable
+        for name, value in node.items():
+            values = value if isinstance(value, list) else [value]
+            if any(isinstance(v, str) and lowered in v.lower() for v in values):
+                hits.append({
+                    "node_path": ancestor + "/jcr:content",
+                    "page_path": ancestor,
+                    "resource_type": "property " + name,
+                })
+    return {
+        "scope": "Inherited from parent pages", "root": "parent pages", "http_status": 200,
+        "message": "OK", "status": "found" if hits else "not_found", "total": len(hits), "hits": hits,
+    }
+
+
+def _site_conf(template):
+    """/conf/<site> from a template path like /conf/<site>/settings/wcm/templates/x."""
+    if template.startswith("/conf/") and "/settings/" in template:
+        return template.split("/settings/", 1)[0]
+    return None
+
+
+def search_page_scope(environment, page, term, token, code_folders=()):
+    """Search only the page and the shared things it uses.
+
+    page: verify_page() result for the page (content_path, template).
+    code_folders: /apps/<project> folders from the page's clientlib URLs.
+    """
+    page_path = page["content_path"]
+    results = [_fulltext(environment, page_path + "/jcr:content", term, token, scope="This page")]
+
+    for fragment in fragments_used(environment, page_path, token):
+        results.append(_fulltext(environment, fragment, term, token, scope="Experience fragment"))
+
+    results.append(inherited_properties(environment, page_path, term, token))
+
+    template = page.get("template") or ""
+    if template.startswith("/conf/"):
+        results.append(_fulltext(environment, template, term, token, scope="Page template"))
+        site_conf = _site_conf(template)
+        if site_conf:
+            results.append(_fulltext(environment, site_conf + "/settings/wcm/policies", term, token,
+                                     scope="Site policies"))
+
+    for folder in code_folders:
+        results.append(_fulltext(environment, folder, term, token, scope="Site code"))
 
     return results

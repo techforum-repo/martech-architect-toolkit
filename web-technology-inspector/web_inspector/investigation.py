@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 from . import aem_lookup, mock_scan
 from .attribution import investigate
-from .detection import detect_technologies, domain_summary
+from .detection import aem_code_folders, detect_technologies, domain_summary
 from .errors import friendly_error
 from .logging_setup import get_logger
 from .mapping import resolve
@@ -133,14 +133,26 @@ def run_investigation(url: str, mappings: list[dict], environments: list[dict], 
     return result
 
 
+SEARCH_SCOPES = ("page", "repository")
+
+
 def analyze_target(result: dict, target: str, *, session_tokens: dict | None = None,
-                   search_aem: bool = True) -> dict:
-    """Browser attribution plus, optionally, AEM references for one target."""
+                   search_aem: bool = True, scope: str = "page") -> dict:
+    """Browser attribution plus, optionally, AEM references for one target.
+
+    scope "page": the page and what it uses (its fragments, parent pages,
+    template, site policies and code). "repository": all of /content, /conf
+    and /apps. Without a confirmed AEM page, only "repository" is possible.
+    """
     findings = investigate(result["browser"], target) if result.get("browser") and target.strip() else []
     references: list[dict] = []
     environment = result.get("environment")
     if search_aem and environment and target.strip():
         auth = environment_token(environment, session_tokens)
-        if auth.get("token"):
+        page = result.get("aem_page") or {}
+        if auth.get("token") and scope == "page" and page.get("status") == "found":
+            folders = aem_code_folders((result.get("browser") or {}).get("requests", []))
+            references = aem_lookup.search_page_scope(environment, page, target.strip(), auth["token"], folders)
+        elif auth.get("token"):
             references = aem_lookup.search_references(environment, target.strip(), auth["token"])
     return {"findings": findings, "aem_references": references}

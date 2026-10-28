@@ -172,11 +172,12 @@ def html_report(report: dict) -> str:
                             [[f["source"], f["confidence"], f["requests"], f["explanation"],
                               (f["evidence"] or [""])[0]] for f in report.get("attribution", [])],
                             numeric=(2,)))
-        references = [h for r in report.get("aem_references", []) for h in r["hits"]]
+        references = [(r.get("scope", r["root"]), h) for r in report.get("aem_references", []) for h in r["hits"]]
         if report.get("aem_references"):
             parts.append(f"<h2>Where AEM references “{escape(target)}”</h2>")
-            parts.append(_table(["Node", "Page", "Component"],
-                                [[h["node_path"], h["page_path"], h["resource_type"]] for h in references]))
+            parts.append(_table(["Found in", "Node", "Page", "Component"],
+                                [[scope, h["node_path"], h["page_path"], h["resource_type"]]
+                                 for scope, h in references]))
 
     parts.append("<h2>Scan stages</h2>")
     parts.append(_table(["Stage", "Status", "Details"],

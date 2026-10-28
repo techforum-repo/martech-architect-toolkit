@@ -19,6 +19,7 @@ QUERYBUILDER_PARAMETERS = frozenset({
     "type",
     "property",
     "property.value",
+    "property.operation",
     "fulltext",
     "p.limit",
     "p.hits",
@@ -100,6 +101,12 @@ def _validate_querybuilder(query):
         if name not in QUERYBUILDER_PARAMETERS:
             raise AEMSecurityError(
                 "QueryBuilder parameter is not permitted: " + name
+            )
+
+        # Only "exists": find nodes that have a property, e.g. fragment references.
+        if name == "property.operation" and value != "exists":
+            raise AEMSecurityError(
+                "QueryBuilder property.operation may only be 'exists'"
             )
 
         if name == "p.limit" and not (
