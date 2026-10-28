@@ -7,7 +7,10 @@ from web_inspector import aem_mock
 from web_inspector.aem_screens import (
     AemLoginRequired,
     SignInIncomplete,
+    _is_sign_in_page,
+    capture_component_dialog,
     capture_page_properties,
+    component_dialog_urls,
     properties_url,
     sign_in,
 )
@@ -103,8 +106,8 @@ class PagePropertiesCaptureTests(unittest.TestCase):
                          ("https://experience.example.test/#/aem/sites", "Experience Cloud"))
 
     def test_sign_in_page_detection(self):
-        from web_inspector.aem_screens import _is_sign_in_page
         for url in ("https://ims-na1.adobelogin.com/ims/authorize",
+                    "https://auth.services.adobe.com/en_US/index.html",  # seen on a real author
                     AUTHOR + "/libs/granite/core/content/login.html", AUTHOR + "/j_security_check"):
             self.assertTrue(_is_sign_in_page(url), url)
         for url in (AUTHOR + "/mnt/overlay/wcm/core/content/sites/properties.html?item=/content/site/login",
@@ -137,6 +140,83 @@ class SignInTests(unittest.TestCase):
                                                               body="<title>Sign in</title>"))
         with self.assertRaises(SignInIncomplete):
             sign_in(self.AUTHOR, timeout=2, show_browser=False, prepare_context=never_signed_in)
+
+
+class ComponentDialogUrlTests(unittest.TestCase):
+    def test_relative_resource_type_tries_apps_then_libs(self):
+        self.assertEqual(component_dialog_urls(AUTHOR, "/content/site/en/jcr:content/root/embed",
+                                               "core/wcm/components/embed/v2/embed"), [
+            AUTHOR + "/mnt/override/apps/core/wcm/components/embed/v2/embed/_cq_dialog.html"
+                     "/content/site/en/jcr:content/root/embed",
+            AUTHOR + "/mnt/override/libs/core/wcm/components/embed/v2/embed/_cq_dialog.html"
+                     "/content/site/en/jcr:content/root/embed",
+        ])
+
+    def test_absolute_resource_type_keeps_its_root_first(self):
+        urls = component_dialog_urls(AUTHOR, "/content/x", "/libs/wcm/foundation/components/text")
+        self.assertIn("/mnt/override/libs/wcm/foundation/components/text/_cq_dialog.html/content/x", urls[0])
+        self.assertIn("/mnt/override/apps/", urls[1])
+
+
+@unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
+class ComponentDialogCaptureTests(unittest.TestCase):
+    AUTHOR = aem_mock.ENVIRONMENT["author_base"]
+    EMBED = "/content/example/us/en/products/jcr:content/root/container/embed"
+
+    def test_component_dialog_field_captured(self):
+        state = sign_in(self.AUTHOR, show_browser=False, prepare_context=aem_mock.serve_author_ui)
+        result = capture_component_dialog(self.AUTHOR, self.EMBED, "core/wcm/components/embed/v2/embed",
+                                          "tracking.example.com", None, storage_state=state,
+                                          prepare_context=aem_mock.serve_author_ui)
+        self.assertEqual([f["label"] for f in result["fields"]], ["html"])
+        self.assertIn("/mnt/override/apps/", result["url"])
+
+    def test_falls_back_to_libs_when_apps_has_no_dialog(self):
+        def libs_only(context):
+            def handle(route):
+                url = route.request.url
+                if "/mnt/override/apps/" in url:
+                    route.fulfill(status=404, body="not found")
+                elif "/mnt/override/libs/" in url:
+                    route.fulfill(status=200, content_type="text/html", body=(
+                        "<div class='coral-Form-fieldwrapper'><label>HTML</label>"
+                        "<input name='./html' value='https://tracking.example.com/t.js'></div>"))
+                else:
+                    route.fulfill(status=200, body=b"")
+            context.route("**/*", handle)
+        result = capture_component_dialog(AUTHOR, "/content/site/en/jcr:content/root/embed",
+                                          "core/wcm/components/embed/v2/embed", "tracking.example.com", TOKEN,
+                                          prepare_context=libs_only)
+        self.assertIn("/mnt/override/libs/", result["url"])
+        self.assertEqual([f["label"] for f in result["fields"]], ["HTML"])
+
+    def test_screenshots_reuse_the_sign_in_browser_identity(self):
+        agents = []
+
+        def record(context):
+            def handle(route):
+                agents.append(route.request.headers.get("user-agent"))
+                route.fallback()
+            aem_mock.serve_author_ui(context)
+            context.route("**/*", handle)  # registered after: sees requests first
+
+        state = dict(sign_in(self.AUTHOR, show_browser=False, prepare_context=aem_mock.serve_author_ui),
+                     user_agent="SignInBrowser/1.0")
+        capture_page_properties(self.AUTHOR, "/content/example/us/en", "tracking.example.com", None,
+                                storage_state=state, prepare_context=record)
+        self.assertTrue(agents)
+        self.assertEqual(set(agents), {"SignInBrowser/1.0"})
+
+    def test_no_session_uses_a_non_headless_agent(self):
+        agents = []
+
+        def record(context):
+            def handle(route):
+                agents.append(route.request.headers.get("user-agent"))
+                route.fulfill(status=200, content_type="text/html", body="<p>dialog</p>")
+            context.route("**/*", handle)
+        capture_page_properties(AUTHOR, "/content/site/en", "x", TOKEN, prepare_context=record)
+        self.assertTrue(agents and not any("Headless" in a for a in agents))
 
 
 if __name__ == "__main__":

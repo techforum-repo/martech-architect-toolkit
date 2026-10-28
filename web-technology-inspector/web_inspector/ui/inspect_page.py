@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from .. import aem_lookup, aem_mock, database, mock_scan, site_credentials
-from ..aem_screens import AemLoginRequired, capture_page_properties
+from ..aem_screens import AemLoginRequired, capture_component_dialog, capture_page_properties
 from ..errors import friendly_error
 from ..config import settings
 from ..detection import EXPECTED_BEFORE_CONSENT, aem_code_folders, consent_violations
@@ -94,7 +94,7 @@ def _after_sign_in() -> None:
         st.session_state["analysis_cache"] = {}
     captures = st.session_state.get("properties_captures")
     if result and captures and any(item.get("sign_in") for item in captures["items"]):
-        _capture_pages(result, captures["pages"], captures["key"][1], captures["key"])
+        _capture_pages(result, captures["targets"], captures["key"][1], captures["key"])
 
 
 def _aem_connection(mappings: list[dict], environments: list[dict], mock: bool) -> None:
@@ -268,26 +268,34 @@ def _groovy_hint(result: dict, target: str) -> None:
     )
 
 
-MAX_AUTO_SCREENSHOTS = 3
+MAX_AUTO_SCREENSHOTS = 6
 
 
 def _properties_pages(result: dict, analysis: dict) -> list[str]:
     """The scanned page, then any page whose own properties matched the search."""
-    return list(dict.fromkeys([result["aem_page"]["content_path"]] + _matched_property_pages(analysis)))
+    pages = [t["path"] for t in _screenshot_targets(analysis) if t["kind"] == "page"]
+    return list(dict.fromkeys([result["aem_page"]["content_path"]] + pages))
 
 
-def _matched_property_pages(analysis: dict) -> list[str]:
-    """Pages whose own properties (their jcr:content node) contain the target."""
-    return list(dict.fromkeys(
-        hit["page_path"]
-        for entry in analysis["aem_references"]
-        for hit in entry["hits"]
-        if hit["node_path"].endswith("/jcr:content")
-    ))
+def _screenshot_targets(analysis: dict) -> list[dict]:
+    """What to screenshot for each AEM match: Page Properties when the match is
+    on a page's own node, else that component instance's edit dialog."""
+    targets = {}
+    for entry in analysis["aem_references"]:
+        for hit in entry["hits"]:
+            node, resource_type = hit["node_path"], hit["resource_type"]
+            if node.endswith("/jcr:content"):
+                targets.setdefault(("page", hit["page_path"]), {
+                    "kind": "page", "path": hit["page_path"], "title": "Page Properties of " + hit["page_path"]})
+            elif node.startswith("/content/") and resource_type and not resource_type.startswith("property "):
+                targets.setdefault(("component", node), {
+                    "kind": "component", "path": node, "resource_type": resource_type,
+                    "title": f"{resource_type.rsplit('/', 1)[-1]} component at {node}"})
+    return list(targets.values())
 
 
-def _capture(result: dict, page: str, target: str) -> dict:
-    """One Page Properties capture as {"page", "result"} or {"page", "error"}."""
+def _capture(result: dict, target_item: dict, term: str) -> dict:
+    """One dialog capture as {"item", "result"}, {"item", "error"} or {"item", "sign_in"}."""
     environment = result["environment"]
     mock = aem_lookup.is_mock(environment)
     if mock and environment["id"] not in st.session_state["aem_ui_sessions"]:
@@ -297,75 +305,83 @@ def _capture(result: dict, page: str, target: str) -> dict:
     if not ui_session:
         auth = environment_auth(environment, st.session_state["session_aem_tokens"])
         if not auth["auth"]:
-            return {"page": page, "sign_in": True}
+            return {"item": target_item, "sign_in": True}
         token = auth["auth"]
+    options = dict(storage_state=ui_session, show_browser=settings.show_browser,
+                   prepare_context=aem_mock.serve_author_ui if mock else None)
     try:
-        return {"page": page, "result": capture_page_properties(
-            environment["author_base"], page, target.strip(), token, storage_state=ui_session,
-            show_browser=settings.show_browser,
-            prepare_context=aem_mock.serve_author_ui if mock else None)}
+        if target_item["kind"] == "page":
+            shot = capture_page_properties(environment["author_base"], target_item["path"], term.strip(),
+                                           token, **options)
+        else:
+            shot = capture_component_dialog(environment["author_base"], target_item["path"],
+                                            target_item["resource_type"], term.strip(), token, **options)
+        return {"item": target_item, "result": shot}
     except AemLoginRequired as exc:
         if not exc.sign_in_page:
-            # Not a sign-in problem: author sent the browser elsewhere. Keep the sign-in.
-            return {"page": page, "error": {"title": "Page Properties opened a different page", "reasons": [
+            return {"item": target_item, "error": {"title": "The dialog opened a different page", "reasons": [
                 f"Landed on {exc.landed}" + (f" (“{exc.title}”)" if exc.title else ""),
-                "Your author may open its UI inside the Adobe Experience Cloud shell instead of on the "
-                "author address. Send this message to the developer to adjust the screenshot address.",
+                "Send this message to the developer to adjust the screenshot address.",
             ]}}
         if ui_session:
             st.session_state["aem_ui_sessions"].pop(environment["id"], None)  # the sign-in has ended
-        return {"page": page, "sign_in": True, "landed": exc.landed, "title": exc.title}
+        return {"item": target_item, "sign_in": True, "landed": exc.landed, "title": exc.title}
     except Exception as exc:  # noqa: BLE001 - shown to the user as a friendly error
         error = friendly_error(exc)
-        return {"page": page, "error": {"title": error.title, "reasons": error.reasons}}
+        return {"item": target_item, "error": {"title": error.title, "reasons": error.reasons}}
 
 
-def _capture_pages(result: dict, pages: list[str], target: str, key: tuple) -> None:
-    """Capture each page, stopping at the first sign-in request."""
+def _capture_pages(result: dict, targets: list[dict], term: str, key: tuple) -> None:
+    """Capture each target, stopping at the first sign-in request."""
     items = []
-    with st.spinner("Taking Page Properties screenshots on author..."):
-        for page in pages:
-            item = _capture(result, page, target)
+    with st.spinner("Taking screenshots on AEM author..."):
+        for target_item in targets:
+            item = _capture(result, target_item, term)
             items.append(item)
             if item.get("sign_in"):
                 break
-    st.session_state["properties_captures"] = {"key": key, "items": items, "pages": pages}
+    st.session_state["properties_captures"] = {"key": key, "items": items, "targets": targets}
 
 
 def auto_capture(result: dict, analysis: dict, target: str, key: tuple) -> None:
-    """After Search AEM: screenshot the pages whose properties matched."""
-    pages = _matched_property_pages(analysis)[:MAX_AUTO_SCREENSHOTS]
-    if pages:
-        _capture_pages(result, pages, target, key)
+    """After Search AEM: screenshot the dialog behind each match."""
+    targets = _screenshot_targets(analysis)[:MAX_AUTO_SCREENSHOTS]
+    if targets:
+        _capture_pages(result, targets, target, key)
     else:
         st.session_state["properties_captures"] = None
 
 
 def _show_captures(captures: dict, target: str) -> None:
-    for item in captures["items"]:
-        st.markdown(f"**{item['page']}**")
+    for index, item in enumerate(captures["items"]):
+        st.markdown(f"**{item['item']['title']}**")
         if item.get("error"):
             show_error({"title": "Screenshot failed: " + item["error"]["title"], "reasons": item["error"]["reasons"]})
             continue
         if item.get("sign_in"):
             continue
         shot = item["result"]
+        if shot.get("status") == 404:
+            st.caption("AEM didn't find a dialog for this component.")
+        elif not shot["fields"]:
+            st.caption(f"No field in this dialog shows “{target}” (it may be in a field the dialog doesn't "
+                       "display). The dialog as opened:")
         if not shot["fields"]:
-            st.caption(f"No field in this page's properties contains “{target}”. The dialog as opened:")
             st.image(shot["page_image"], width="stretch")
-        for index, field in enumerate(shot["fields"], 1):
+        for number, field in enumerate(shot["fields"], 1):
             st.image(field["image"], width="stretch",
                      caption=f"{field['label'] or field['name']} = {field['value'][:120]}")
             st.download_button("Download screenshot", field["image"],
-                               f"page-properties-{item['page'].rsplit('/', 1)[-1]}-{index}.png", "image/png",
-                               key=f"properties_download_{item['page']}_{index}")
+                               f"aem-{item['item']['path'].rsplit('/', 1)[-1]}-{number}.png", "image/png",
+                               key=f"aem_screenshot_{index}_{number}")
         if shot["blocked_writes"]:
             st.caption(f"{len(shot['blocked_writes'])} write request(s) from the author UI were blocked.")
 
 
 def _properties_screenshot(result: dict, analysis: dict, target: str, key: tuple) -> None:
-    st.markdown("#### Page Properties screenshots")
-    st.caption("Taken on author for each page whose properties contain the target, highlighting the field. "
+    st.markdown("#### AEM screenshots")
+    st.caption("For each match: Page Properties when the target is a page property, or that component's "
+               "edit dialog when it's in a component, on the right tab with the field highlighted. "
                "Read-only: the browser blocks every write request and clicks only dialog tabs.")
     if not target.strip():
         st.info("Choose or type a target above.")
@@ -378,7 +394,7 @@ def _properties_screenshot(result: dict, analysis: dict, target: str, key: tuple
         item = next(item for item in current["items"] if item.get("sign_in"))
         landed = f" It opened {item['landed']}" + (f" (“{item['title']}”)." if item.get("title") else ".") \
             if item.get("landed") else ""
-        st.warning("AEM showed a sign-in page instead of Page Properties, so the sign-in has ended or isn't "
+        st.warning("AEM showed a sign-in page instead of the dialog, so the sign-in has ended or isn't "
                    f"accepted for its UI.{landed} Use **Sign in to AEM** at the top of the page; the screenshots "
                    "are taken right after.")
         return
@@ -389,12 +405,13 @@ def _properties_screenshot(result: dict, analysis: dict, target: str, key: tuple
             st.success(f"{taken} screenshot(s) taken.")
         _show_captures(current, target)
     elif st.session_state.get("aem_searched") == key:
-        st.caption("No page's own properties contain the target, so no screenshot was taken automatically.")
+        st.caption("No match in AEM to screenshot.")
 
     with st.expander("Screenshot another page's properties"):
         page = st.selectbox("Page", _properties_pages(result, analysis), key="properties_page")
         if st.button("Screenshot Page Properties in AEM"):
-            _capture_pages(result, [page], target, key)
+            _capture_pages(result, [{"kind": "page", "path": page, "title": "Page Properties of " + page}],
+                           target, key)
             st.rerun()
 
 

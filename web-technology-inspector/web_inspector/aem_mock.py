@@ -41,6 +41,18 @@ PAGES = {
     },
 }
 
+# Properties of the sample component instances, shown in their edit dialogs.
+COMPONENT_PROPS = {
+    "/content/example/us/en/products/jcr:content/root/container/embed": {
+        "jcr:title": "Tracking embed",
+        "html": '<script src="https://tracking.example.com/t.js"></script>',
+    },
+    "/content/experience-fragments/example/us/en/site/footer/master/jcr:content/root/html": {
+        "jcr:title": "Footer pixel",
+        "html": '<img src="https://tracking.example.com/pixel.gif" alt="">',
+    },
+}
+
 # Experience fragment variations each page references (fragmentVariationPath).
 FRAGMENTS = {
     "/content/example/us/en/products": [
@@ -148,11 +160,12 @@ def get(url):
     return MockResponse(404, {})
 
 
-def _dialog(page_path):
-    """A small Page Properties dialog in AEM's markup for a sample page."""
+def _dialog(page_path, props=None, heading="Page Properties"):
+    """A small dialog in AEM's markup: Page Properties of a sample page, or a
+    sample component's edit dialog when props are given."""
     from html import escape
 
-    props = PAGES.get(page_path, {})
+    props = PAGES.get(page_path, {}) if props is None else props
     basic = {"jcr:title": props.get("jcr:title", "")}
     advanced = {k: v for k, v in props.items() if k not in basic and isinstance(v, str)}
 
@@ -167,7 +180,7 @@ def _dialog(page_path):
     return (
         "<!doctype html><html><head><title>Page Properties (sample)</title></head>"
         "<body style='font:14px sans-serif;margin:24px'>"
-        f"<h2 style='margin:0 0 12px'>Page Properties: {escape(page_path)} (sample)</h2>"
+        f"<h2 style='margin:0 0 12px'>{escape(heading)}: {escape(page_path)} (sample)</h2>"
         "<coral-tablist style='display:flex;gap:16px;border-bottom:1px solid #ccc;padding-bottom:6px'>"
         "<coral-tab onclick='show(0)' style='cursor:pointer'>Basic</coral-tab>"
         "<coral-tab onclick='show(1)' style='cursor:pointer'>Advanced</coral-tab></coral-tablist>"
@@ -189,6 +202,10 @@ def serve_author_ui(context):
             # Sample sign-in: author sets its login cookie straight away.
             route.fulfill(status=200, content_type="text/html", body="<title>AEM Start (sample)</title>",
                           headers={"Set-Cookie": "login-token=sample; Path=/; Secure"})
+        elif "/_cq_dialog.html/" in url.path and url.path.startswith("/mnt/override/"):
+            node = "/" + url.path.split("/_cq_dialog.html/", 1)[1]
+            route.fulfill(status=200, content_type="text/html",
+                          body=_dialog(node, COMPONENT_PROPS.get(node, {}), "Component dialog"))
         elif url.path == "/mnt/overlay/wcm/core/content/sites/properties.html":
             route.fulfill(status=200, content_type="text/html",
                           body=_dialog(dict(parse_qsl(url.query)).get("item", "")))

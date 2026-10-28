@@ -119,14 +119,21 @@ which is a quick way to check what your AEM user may call:
     --prefix /us/en --root /content/your-site/us/en --term tracking.your-vendor.com
 ```
 
-### Page Properties screenshots
+### AEM screenshots
 
-When **Search AEM** finds the target in a page's own properties (the scanned
-page or a parent page), the app opens Page Properties on author for up to
-three such pages and shows a screenshot of each matching field, highlighted,
-on whichever dialog tab it is. Any other page's properties can be captured
-from **Screenshot another page's properties**. In mock mode a sample dialog
-and sample sign-in are used.
+When **Search AEM** finds the target, the app takes a screenshot of where it is
+configured, for up to six matches:
+
+- **A page property** (the match is on a page's own node, the scanned page or
+  a parent page): Page Properties of that page.
+- **A component property** (the match is on a component node, also inside
+  experience fragments): that component instance's edit dialog, opened at the
+  same address the page editor uses (`/mnt/override/.../_cq_dialog.html<node>`,
+  under `/apps`, else `/libs`).
+
+Each screenshot shows the dialog on the tab that holds the field, with the
+field highlighted. Page Properties of any other page can be captured from
+**Screenshot another page's properties**. In mock mode a sample author is used.
 
 Screenshots use your AEM sign-in. If you're not signed in yet, the app shows
 **Sign in to AEM author** and takes the screenshots right after. The sign-in
