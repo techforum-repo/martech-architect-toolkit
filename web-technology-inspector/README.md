@@ -67,6 +67,18 @@ Authentication**, for the session only or saved encrypted on this machine
 - Don't put credentials in the URL (`https://user:pass@host`): it is rejected,
   because URLs are stored in history and reports.
 
+### Using the Inspect page
+
+1. **Sign in to AEM** in the bar at the top (once per session). It shows which
+   AEM environment the URL belongs to and whether you're signed in.
+2. **Run investigation.** If you weren't signed in yet, signing in afterwards
+   completes the AEM part of the same scan without scanning the page again.
+3. **Trace a script or domain:** choose what to trace and click **Search
+   AEM**. "How it was added", the AEM page, where AEM references it and the
+   Page Properties screenshots appear right below the button.
+4. **Scan details** (technologies, third parties, consent, graph, page
+   screenshot, reports) are in the tabs further down.
+
 ## How AEM lookups work
 
 All AEM access is read-only `GET` requests, checked in `web_inspector/aem_client.py`

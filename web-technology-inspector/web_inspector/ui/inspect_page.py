@@ -18,7 +18,7 @@ from ..investigation import analyze_target, environment_auth, lookup_aem_page, n
 from ..report import build_report, dot_graph, html_report, request_graph, requests_csv, stage_label
 from ..site_config import load, match
 from ..targets import available_targets
-from .shared import megabytes, show_error, sign_in_to_aem, signed_in
+from .shared import megabytes, show_error, sign_in_to_aem
 
 CONSENT_MODES = {
     "Leave the consent banner alone": "none",
@@ -35,6 +35,7 @@ def _configuration(mock: bool) -> tuple[list[dict], list[dict]]:
 def _run_form(mappings: list[dict], mock: bool) -> None:
     url = st.text_input(
         "Website URL",
+        key="inspect_url_mock" if mock else "inspect_url",
         value=mock_scan.PAGE if mock else "",
         placeholder="https://www.example.com/en/page.html",
     )
@@ -74,6 +75,50 @@ def _run_form(mappings: list[dict], mock: bool) -> None:
             result["scan_id"] = database.save_scan(result, consent)
         st.session_state["result"] = result
         st.session_state["analysis_cache"] = {}
+
+
+def _environment_for(url: str, mappings: list[dict], environments: list[dict]) -> dict | None:
+    host = (urlsplit(url).hostname or "").lower() if url else ""
+    mapping = next((m for m in mappings if m["published_domain"].lower() == host), None)
+    if not mapping:
+        return None
+    return next((e for e in environments if e["id"] == mapping["environment_id"]), None)
+
+
+def _after_sign_in() -> None:
+    """Redo whatever was waiting for the sign-in: the scan's AEM stage, then screenshots."""
+    result = st.session_state.get("result")
+    if result and result.get("environment") and needs_sign_in(result):
+        lookup_aem_page(result, session_tokens=st.session_state["session_aem_tokens"],
+                        ui_sessions=st.session_state["aem_ui_sessions"])
+        st.session_state["analysis_cache"] = {}
+    captures = st.session_state.get("properties_captures")
+    if result and captures and any(item.get("sign_in") for item in captures["items"]):
+        _capture_pages(result, captures["pages"], captures["key"][1], captures["key"])
+
+
+def _aem_connection(mappings: list[dict], environments: list[dict], mock: bool) -> None:
+    """The single place to see and set up the AEM connection."""
+    if mock:
+        st.caption("AEM: sample author (mock mode), no sign-in needed.")
+        return
+    environment = _environment_for(st.session_state.get("inspect_url", ""), mappings, environments)
+    if not environment:
+        return
+    auth = environment_auth(environment, st.session_state["session_aem_tokens"],
+                            st.session_state["aem_ui_sessions"])
+    col1, col2 = st.columns([4, 1])
+    if auth["method"] == "sign-in":
+        col1.success(f"Signed in to AEM ({environment['name']}) for this session.")
+    elif auth["method"] == "token":
+        col1.info(f"Connected to AEM ({environment['name']}) with a token. Sign in instead for screenshots.")
+    else:
+        col1.warning(f"Not signed in to AEM ({environment['name']}). Sign in to find the AEM page, "
+                     "search AEM and take screenshots.")
+    if auth["method"] != "sign-in" and col2.button("Sign in to AEM", type="primary", key="aem_sign_in"):
+        if sign_in_to_aem(environment):
+            _after_sign_in()
+            st.rerun()
 
 
 def _changes(result: dict) -> None:
@@ -245,6 +290,8 @@ def _capture(result: dict, page: str, target: str) -> dict:
     """One Page Properties capture as {"page", "result"} or {"page", "error"}."""
     environment = result["environment"]
     mock = aem_lookup.is_mock(environment)
+    if mock and environment["id"] not in st.session_state["aem_ui_sessions"]:
+        sign_in_to_aem(environment)  # the sample author's sign-in needs no user action
     ui_session = st.session_state["aem_ui_sessions"].get(environment["id"])
     token = None
     if not ui_session:
@@ -309,34 +356,29 @@ def _show_captures(captures: dict, target: str) -> None:
 
 
 def _properties_screenshot(result: dict, analysis: dict, target: str, key: tuple) -> None:
-    st.subheader("Page Properties screenshots")
+    st.markdown("#### Page Properties screenshots")
     st.caption("Taken on author for each page whose properties contain the target, highlighting the field. "
                "Read-only: the browser blocks every write request and clicks only dialog tabs.")
     if not target.strip():
         st.info("Choose or type a target above.")
         return
 
-    environment = result["environment"]
     captures = st.session_state.get("properties_captures")
     current = captures if captures and captures["key"] == key else None
 
     if current and any(item.get("sign_in") for item in current["items"]):
-        st.warning("AEM author asks for a sign-in before it shows its UI. Sign in once in the browser window "
-                   "that opens; the screenshots are then taken automatically. The sign-in is kept in memory "
-                   "for this session only.")
-        if st.button("Sign in to AEM author", type="primary", key="screenshot_sign_in"):
-            if sign_in_to_aem(result["environment"]):
-                _capture_pages(result, current["pages"], target, key)
-                st.rerun()
+        st.warning("AEM needs a sign-in for screenshots. Use **Sign in to AEM** at the top of the page; "
+                   "the screenshots are taken right after.")
         return
 
     if current:
+        taken = sum(len(item["result"]["fields"]) for item in current["items"] if item.get("result"))
+        if taken:
+            st.success(f"{taken} screenshot(s) taken.")
         _show_captures(current, target)
     elif st.session_state.get("aem_searched") == key:
         st.caption("No page's own properties contain the target, so no screenshot was taken automatically.")
 
-    if signed_in(environment):
-        st.caption("Signed in to AEM author (this session).")
     with st.expander("Screenshot another page's properties"):
         page = st.selectbox("Page", _properties_pages(result, analysis), key="properties_page")
         if st.button("Screenshot Page Properties in AEM"):
@@ -344,23 +386,12 @@ def _properties_screenshot(result: dict, analysis: dict, target: str, key: tuple
             st.rerun()
 
 
-def _sign_in_prompt(result: dict, reason: str) -> None:
-    """Sign in, then rerun only the AEM stage of this scan."""
-    st.warning(f"{reason}. Sign in to AEM author once in the browser window that opens; the AEM lookups "
-               "then run for this scan. The sign-in is kept in memory for this session only.")
-    if st.button("Sign in to AEM", type="primary", key="aem_tab_sign_in"):
-        if sign_in_to_aem(result["environment"]):
-            lookup_aem_page(result, session_tokens=st.session_state["session_aem_tokens"],
-                            ui_sessions=st.session_state["aem_ui_sessions"])
-            st.session_state["analysis_cache"] = {}
-            st.rerun()
-
-
 def _aem_tab(result: dict, analysis: dict, target: str, searched: bool, key: tuple) -> None:
     page = result.get("aem_page")
     stage = result["stages"].get("aem", {})
     if needs_sign_in(result):
-        _sign_in_prompt(result, stage.get("detail", ""))
+        st.warning(f"{stage.get('detail', 'Not signed in to AEM')}. Use **Sign in to AEM** at the top of "
+                   "the page; the AEM lookups then run for this scan.")
         return
     if not page:
         st.warning("AEM lookup unavailable: " + (stage.get("detail") or stage.get("status", "")))
@@ -372,7 +403,7 @@ def _aem_tab(result: dict, analysis: dict, target: str, searched: bool, key: tup
     else:
         st.warning("Page not found in AEM: " + page.get("message", ""))
 
-    st.subheader("Where AEM references the target")
+    st.markdown("#### Where AEM references the target")
     if not target.strip():
         st.info("Choose or type a target above.")
     elif not searched:
@@ -413,6 +444,7 @@ def render() -> None:
     mock = st.session_state["mock_mode"]
     mappings, _ = _configuration(mock)
     _run_form(mappings, mock)
+    _aem_connection(mappings, _configuration(mock)[1], mock)
 
     result = st.session_state.get("result")
     if not result:
@@ -434,6 +466,7 @@ def render() -> None:
     _changes(result)
 
     st.divider()
+    st.header("Trace a script or domain")
     target = _target_picker(browser)
     page_found = (result.get("aem_page") or {}).get("status") == "found"
     col1, col2 = st.columns([3, 1])
@@ -443,8 +476,14 @@ def render() -> None:
              "properties, its template and site policies, and its code folder.",
     )
     scope = SCOPES[scope_label]
-    searched = col2.button("Search AEM", disabled=not (target.strip() and result.get("aem_page")),
+    searched = col2.button("Search AEM", type="primary",
+                           disabled=not (target.strip() and page_found),
                            help="Read-only search on author for this target")
+    if not page_found:
+        col2.caption("Needs the AEM page: sign in to AEM at the top." if needs_sign_in(result)
+                     else "Needs the AEM page, which wasn't found for this URL.")
+    elif not target.strip():
+        col2.caption("Choose what to trace first.")
     key = (result["timestamp"], target, scope)
     if searched:
         st.session_state["aem_searched"] = key
@@ -453,8 +492,18 @@ def render() -> None:
     if searched and page_found:
         auto_capture(result, analysis, target, key)
 
-    tabs = st.tabs(["Technologies", "Third parties", "Consent & cookies", "How it was added",
-                    "AEM", "Dependency graph", "Screenshot", "Report"])
+    # Results of the trace stay right here, not in a tab: tabs reset to the
+    # first one whenever the page refreshes, which hid them.
+    if target.strip():
+        st.subheader("How it was added")
+        _attribution_tab(analysis, target)
+        st.subheader("In AEM")
+        _aem_tab(result, analysis, target, search_aem, key)
+
+    st.divider()
+    st.header("Scan details")
+    tabs = st.tabs(["Technologies", "Third parties", "Consent & cookies", "Dependency graph",
+                    "Page screenshot", "Report"])
     with tabs[0]:
         _technologies_tab(result)
     with tabs[1]:
@@ -462,10 +511,6 @@ def render() -> None:
     with tabs[2]:
         _consent_tab(result, browser)
     with tabs[3]:
-        _attribution_tab(analysis, target)
-    with tabs[4]:
-        _aem_tab(result, analysis, target, search_aem, key)
-    with tabs[5]:
         edges = request_graph(browser)
         if edges:
             graph = dot_graph(edges)
@@ -473,11 +518,11 @@ def render() -> None:
             st.download_button("Download graph (.dot)", graph, "dependencies.dot", "text/plain")
         else:
             st.info("No script-to-request relationships were captured.")
-    with tabs[6]:
+    with tabs[4]:
         if browser.get("screenshot"):
             st.image(browser["screenshot"], caption=browser.get("title", ""), width="stretch")
             st.download_button("Download screenshot", browser["screenshot"], "screenshot.png", "image/png")
         else:
             st.info("No screenshot (mock mode, or the scan did not complete).")
-    with tabs[7]:
+    with tabs[5]:
         _report_tab(result, browser, analysis, target)
