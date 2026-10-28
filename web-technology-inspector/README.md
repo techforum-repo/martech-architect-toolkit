@@ -132,7 +132,9 @@ configured, for up to six matches:
   under `/apps`, else `/libs`).
 
 Each screenshot shows the dialog on the tab that holds the field, with the
-field highlighted. Page Properties of any other page can be captured from
+field highlighted. Custom and nested tabs are followed: every tab on the way
+to the field is opened, outermost first, and the caption shows the path (for
+example "Analytics › Tracking"). Page Properties of any other page can be captured from
 **Screenshot another page's properties**. In mock mode a sample author is used.
 
 Screenshots use your AEM sign-in. If you're not signed in yet, the app shows

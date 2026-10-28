@@ -25,32 +25,55 @@ READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 PROPERTIES_PATH = "/mnt/overlay/wcm/core/content/sites/properties.html"
 
 # Finds form fields whose value contains the term, including fields on
-# inactive dialog tabs, and returns where each one is.
+# inactive and nested dialog tabs (custom tabs included), and returns each
+# one with the tab path that leads to it.
 FIND_FIELDS_SCRIPT = """term => {
     const lowered = term.toLowerCase();
-    const fields = [...document.querySelectorAll('input, textarea, select, [value]')];
+    const PANEL = 'coral-panel, [role=tabpanel]';
+    // The tab that shows a panel: AEM links them with aria-labelledby; otherwise
+    // the tab at the same position in the panel's own tab group.
+    const tabFor = panel => {
+        const id = panel.getAttribute('aria-labelledby');
+        if (id && document.getElementById(id)) return document.getElementById(id);
+        const panels = [...panel.parentElement.children].filter(c => c.matches(PANEL));
+        let group = panel.parentElement;
+        while (group && !group.querySelector(':scope > coral-tablist, :scope > [role=tablist]')) {
+            group = group.parentElement;
+        }
+        if (!group) return null;
+        const list = group.querySelector(':scope > coral-tablist, :scope > [role=tablist]');
+        const tabs = [...list.children].filter(c => c.matches('coral-tab, [role=tab]'));
+        return tabs[panels.indexOf(panel)] || null;
+    };
     const results = [];
+    const fields = [...document.querySelectorAll('input, textarea, select, [value]')];
     fields.forEach((field, index) => {
         const value = (field.value ?? field.getAttribute('value') ?? '').toString();
         if (!value.toLowerCase().includes(lowered) || field.type === 'hidden') return;
         const wrapper = field.closest('.coral-Form-fieldwrapper, .coral-Form-field, .foundation-field-edit') || field.parentElement;
         const label = wrapper && wrapper.querySelector('label, .coral-Form-fieldlabel');
-        const panel = field.closest('coral-panel, [role=tabpanel]');
-        let tab = -1;
-        if (panel && panel.parentElement) {
-            tab = [...panel.parentElement.children].filter(c => c.matches('coral-panel, [role=tabpanel]')).indexOf(panel);
+        const tabs = [];
+        for (let panel = field.closest(PANEL); panel; panel = panel.parentElement && panel.parentElement.closest(PANEL)) {
+            const tab = tabFor(panel);
+            if (tab) {
+                tab.setAttribute('data-wti-tab', '');
+                tabs.unshift(tab);  // outermost first
+            }
         }
-        field.setAttribute('data-wti-match', String(index));
-        results.push({marker: String(index), name: field.getAttribute('name') || '',
-                      label: label ? label.textContent.trim() : '', value: value.slice(0, 300), tab});
+        const marker = String(index);
+        field.setAttribute('data-wti-match', marker);
+        tabs.forEach((tab, depth) => tab.setAttribute('data-wti-tab-' + marker + '-' + depth, ''));
+        results.push({marker, name: field.getAttribute('name') || '', label: label ? label.textContent.trim() : '',
+                      value: value.slice(0, 300), tabs: tabs.map(t => t.textContent.trim()), depth: tabs.length});
     });
     return results;
 }"""
 
-SHOW_FIELD_SCRIPT = """([marker, tab]) => {
-    if (tab >= 0) {
-        const tabs = [...document.querySelectorAll('coral-tab, [role=tab]')];
-        if (tabs[tab]) tabs[tab].click();
+# Opens each tab on the path, outermost first, then highlights the field.
+SHOW_FIELD_SCRIPT = """([marker, depth]) => {
+    for (let level = 0; level < depth; level++) {
+        const tab = document.querySelector(`[data-wti-tab-${marker}-${level}]`);
+        if (tab) tab.click();
     }
     const field = document.querySelector(`[data-wti-match="${marker}"]`);
     if (!field) return false;
@@ -59,6 +82,14 @@ SHOW_FIELD_SCRIPT = """([marker, tab]) => {
     box.style.outline = '4px solid #e8710a';
     box.style.outlineOffset = '4px';
     return true;
+}"""
+
+# Whether the highlighted field is actually showing (not on a hidden tab).
+FIELD_VISIBLE_SCRIPT = """marker => {
+    const field = document.querySelector(`[data-wti-match="${marker}"]`);
+    if (!field) return false;
+    const box = field.getBoundingClientRect();
+    return field.getClientRects().length > 0 && box.width > 0 && box.height > 0;
 }"""
 
 
@@ -226,10 +257,11 @@ def _capture_dialogs(author_base: str, urls: list[str], term: str, token: str | 
             fields = page.evaluate(FIND_FIELDS_SCRIPT, term)
             captured = []
             for field in fields[:10]:
-                if page.evaluate(SHOW_FIELD_SCRIPT, [field["marker"], field["tab"]]):
-                    page.wait_for_timeout(300)  # tab switch and scroll
+                if page.evaluate(SHOW_FIELD_SCRIPT, [field["marker"], field["depth"]]):
+                    page.wait_for_timeout(300 + 200 * field["depth"])  # tab switches and scroll
                     captured.append({
                         "label": field["label"], "name": field["name"], "value": field["value"],
+                        "tabs": field["tabs"], "visible": page.evaluate(FIELD_VISIBLE_SCRIPT, field["marker"]),
                         "image": page.screenshot(full_page=False, animations="disabled"),
                     })
 

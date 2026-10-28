@@ -369,8 +369,12 @@ def _show_captures(captures: dict, target: str) -> None:
         if not shot["fields"]:
             st.image(shot["page_image"], width="stretch")
         for number, field in enumerate(shot["fields"], 1):
+            where = " › ".join(field.get("tabs") or [])
+            if field.get("visible") is False:
+                st.caption("The field's tab couldn't be opened, so it may not show in this screenshot.")
             st.image(field["image"], width="stretch",
-                     caption=f"{field['label'] or field['name']} = {field['value'][:120]}")
+                     caption=(f"Tab: {where} · " if where else "")
+                     + f"{field['label'] or field['name']} = {field['value'][:120]}")
             st.download_button("Download screenshot", field["image"],
                                f"aem-{item['item']['path'].rsplit('/', 1)[-1]}-{number}.png", "image/png",
                                key=f"aem_screenshot_{index}_{number}")

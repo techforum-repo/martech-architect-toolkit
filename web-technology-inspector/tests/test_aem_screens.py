@@ -221,3 +221,47 @@ class ComponentDialogCaptureTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+NESTED_DIALOG = """<!doctype html><html><body>
+<coral-tabview id="outer">
+  <coral-tablist><coral-tab>Basic</coral-tab><coral-tab>Analytics</coral-tab></coral-tablist>
+  <coral-panelstack>
+    <coral-panel><div class="coral-Form-fieldwrapper"><label>Title</label><input name="./jcr:title" value="Home"></div></coral-panel>
+    <coral-panel>
+      <coral-tabview id="inner">
+        <coral-tablist><coral-tab>General</coral-tab><coral-tab id="tab-tracking">Tracking</coral-tab></coral-tablist>
+        <coral-panelstack>
+          <coral-panel><div class="coral-Form-fieldwrapper"><label>Owner</label><input name="./owner" value="x"></div></coral-panel>
+          <coral-panel aria-labelledby="tab-tracking"><div class="coral-Form-fieldwrapper"><label>Tracking domain</label>
+            <input name="./trackingDomain" value="tracking.example.com"></div></coral-panel>
+        </coral-panelstack>
+      </coral-tabview>
+    </coral-panel>
+  </coral-panelstack>
+</coral-tabview>
+<script>
+  // Coral-like behaviour: a tab shows the panel at its position in its own tab view.
+  document.querySelectorAll('coral-tabview').forEach(view => {
+    const tabs = [...view.querySelector(':scope > coral-tablist').children];
+    const panels = [...view.querySelector(':scope > coral-panelstack').children];
+    const show = i => panels.forEach((p, n) => { p.style.display = n === i ? '' : 'none'; p.toggleAttribute('selected', n === i); });
+    tabs.forEach((tab, i) => tab.addEventListener('click', () => show(i)));
+    show(0);
+  });
+</script></body></html>"""
+
+
+@unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
+class NestedTabTests(unittest.TestCase):
+    def test_field_on_nested_custom_tab(self):
+        def serve(context):
+            context.route("**/*", lambda route: route.fulfill(status=200, content_type="text/html",
+                                                              body=NESTED_DIALOG))
+        result = capture_page_properties(AUTHOR, "/content/site/en", "tracking.example.com", TOKEN,
+                                         prepare_context=serve)
+        [field] = result["fields"]
+        self.assertEqual(field["label"], "Tracking domain")
+        self.assertEqual(field["tabs"], ["Analytics", "Tracking"])  # outer tab, then the custom inner tab
+        self.assertTrue(field["visible"])  # both tabs were opened, so the field is on screen
+        self.assertTrue(field["image"].startswith(b"\x89PNG"))
