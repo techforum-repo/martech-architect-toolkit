@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 import pandas as pd
 import streamlit as st
 
-from .. import aem_lookup, aem_mock, database, mock_scan, site_credentials
+from .. import aem_browser, aem_lookup, aem_mock, database, mock_scan, site_credentials
 from ..aem_screens import AemLoginRequired, capture_component_dialog, capture_page_properties
 from ..errors import friendly_error
 from ..config import settings
@@ -108,14 +108,19 @@ def _aem_connection(mappings: list[dict], environments: list[dict], mock: bool) 
     auth = environment_auth(environment, st.session_state["session_aem_tokens"],
                             st.session_state["aem_ui_sessions"])
     col1, col2 = st.columns([4, 1])
-    if auth["method"] == "sign-in":
-        col1.success(f"Signed in to AEM ({environment['name']}) for this session.")
+    if auth["method"] == "sign-in" and aem_browser.get_window(environment["id"]):
+        col1.success(f"Signed in to AEM ({environment['name']}). Keep the AEM window open for screenshots.")
+    elif auth["method"] == "sign-in":
+        col1.info(f"Signed in to AEM ({environment['name']}) for lookups. The AEM window was closed: "
+                  "sign in again for screenshots.")
     elif auth["method"] == "token":
         col1.info(f"Connected to AEM ({environment['name']}) with a token. Sign in instead for screenshots.")
     else:
         col1.warning(f"Not signed in to AEM ({environment['name']}). Sign in to find the AEM page, "
                      "search AEM and take screenshots.")
-    if auth["method"] != "sign-in" and col2.button("Sign in to AEM", type="primary", key="aem_sign_in"):
+    window_open = aem_browser.get_window(environment["id"]) is not None
+    if not (auth["method"] == "sign-in" and window_open) and \
+            col2.button("Sign in to AEM", type="primary", key="aem_sign_in"):
         if sign_in_to_aem(environment):
             _after_sign_in()
             st.rerun()
@@ -295,37 +300,48 @@ def _screenshot_targets(analysis: dict) -> list[dict]:
 
 
 def _capture(result: dict, target_item: dict, term: str) -> dict:
-    """One dialog capture as {"item", "result"}, {"item", "error"} or {"item", "sign_in"}."""
+    """One dialog capture as {"item", "result"}, {"item", "error"} or {"item", "sign_in"}.
+
+    Taken in the signed-in AEM window when there is one (AEM's UI only trusts
+    the browser the user signed in with); else in a new browser with a token."""
     environment = result["environment"]
     mock = aem_lookup.is_mock(environment)
-    if mock and environment["id"] not in st.session_state["aem_ui_sessions"]:
-        sign_in_to_aem(environment)  # the sample author's sign-in needs no user action
-    ui_session = st.session_state["aem_ui_sessions"].get(environment["id"])
-    token = None
-    if not ui_session:
-        auth = environment_auth(environment, st.session_state["session_aem_tokens"])
-        if not auth["auth"]:
-            return {"item": target_item, "sign_in": True}
-        token = auth["auth"]
-    options = dict(storage_state=ui_session, show_browser=settings.show_browser,
-                   prepare_context=aem_mock.serve_author_ui if mock else None)
+    window = aem_browser.get_window(environment["id"])
+    if mock and not window and sign_in_to_aem(environment):  # the sample sign-in needs no user action
+        window = aem_browser.get_window(environment["id"])
+    term = term.strip()
     try:
-        if target_item["kind"] == "page":
-            shot = capture_page_properties(environment["author_base"], target_item["path"], term.strip(),
-                                           token, **options)
+        if window and target_item["kind"] == "page":
+            shot = aem_browser.capture_page_properties(window, target_item["path"], term)
+        elif window:
+            shot = aem_browser.capture_component_dialog(window, target_item["path"],
+                                                        target_item["resource_type"], term)
         else:
-            shot = capture_component_dialog(environment["author_base"], target_item["path"],
-                                            target_item["resource_type"], term.strip(), token, **options)
+            auth = environment_auth(environment, st.session_state["session_aem_tokens"])
+            if auth["method"] != "token":
+                return {"item": target_item, "sign_in": True,
+                        "reason": "Screenshots are taken in the AEM window you sign in with, and it isn't open."}
+            options = dict(show_browser=settings.show_browser)
+            if target_item["kind"] == "page":
+                shot = capture_page_properties(environment["author_base"], target_item["path"], term,
+                                               auth["auth"], **options)
+            else:
+                shot = capture_component_dialog(environment["author_base"], target_item["path"],
+                                                target_item["resource_type"], term, auth["auth"], **options)
         return {"item": target_item, "result": shot}
+    except aem_browser.WindowClosed:
+        return {"item": target_item, "sign_in": True,
+                "reason": "The AEM window was closed, so screenshots need a new sign-in."}
     except AemLoginRequired as exc:
         if not exc.sign_in_page:
             return {"item": target_item, "error": {"title": "The dialog opened a different page", "reasons": [
                 f"Landed on {exc.landed}" + (f" (“{exc.title}”)" if exc.title else ""),
                 "Send this message to the developer to adjust the screenshot address.",
             ]}}
-        if ui_session:
-            st.session_state["aem_ui_sessions"].pop(environment["id"], None)  # the sign-in has ended
-        return {"item": target_item, "sign_in": True, "landed": exc.landed, "title": exc.title}
+        st.session_state["aem_ui_sessions"].pop(environment["id"], None)  # the sign-in has ended
+        aem_browser.close_window(environment["id"])
+        return {"item": target_item, "sign_in": True, "landed": exc.landed, "title": exc.title,
+                "reason": "AEM showed a sign-in page instead of the dialog: the sign-in has ended."}
     except Exception as exc:  # noqa: BLE001 - shown to the user as a friendly error
         error = friendly_error(exc)
         return {"item": target_item, "error": {"title": error.title, "reasons": error.reasons}}
@@ -396,11 +412,9 @@ def _properties_screenshot(result: dict, analysis: dict, target: str, key: tuple
 
     if current and any(item.get("sign_in") for item in current["items"]):
         item = next(item for item in current["items"] if item.get("sign_in"))
-        landed = f" It opened {item['landed']}" + (f" (“{item['title']}”)." if item.get("title") else ".") \
-            if item.get("landed") else ""
-        st.warning("AEM showed a sign-in page instead of the dialog, so the sign-in has ended or isn't "
-                   f"accepted for its UI.{landed} Use **Sign in to AEM** at the top of the page; the screenshots "
-                   "are taken right after.")
+        landed = f" It opened {item['landed']}." if item.get("landed") else ""
+        st.warning(f"{item.get('reason', 'AEM needs a sign-in for screenshots.')}{landed} Use **Sign in to AEM** "
+                   "at the top of the page and keep the AEM window open; the screenshots are taken right after.")
         return
 
     if current:

@@ -5,8 +5,8 @@ web_inspector/ui/*. Page-specific rendering stays in that page's own module."""
 
 import streamlit as st
 
-from .. import VERSION, aem_lookup, aem_mock, preferences
-from ..aem_screens import SignInIncomplete, sign_in
+from .. import VERSION, aem_browser, aem_lookup, aem_mock, preferences
+from ..aem_screens import SignInIncomplete
 from ..config import settings
 from ..errors import FriendlyError, friendly_error
 
@@ -76,12 +76,16 @@ def signed_in(environment: dict) -> bool:
 
 
 def sign_in_to_aem(environment: dict) -> bool:
-    """Open a browser on author, wait for the user to sign in, keep the session in memory."""
+    """Open an AEM window, wait for the user to sign in, and keep it open for screenshots.
+
+    Its login cookies are also kept in memory for the AEM lookups."""
     mock = aem_lookup.is_mock(environment)
-    with st.spinner("A browser window is open on AEM author: sign in there. It closes by itself."):
+    with st.spinner("An AEM window is open: sign in there. Keep it open (it's used for screenshots)."):
         try:
-            state = sign_in(environment["author_base"], show_browser=not mock,
-                            prepare_context=aem_mock.serve_author_ui if mock else None)
+            window = aem_browser.open_window(environment["id"], environment["author_base"],
+                                             show_browser=not mock,
+                                             prepare_context=aem_mock.serve_author_ui if mock else None)
+            state = window.storage_state
         except SignInIncomplete as exc:
             show_error({"title": "Not signed in", "reasons": [str(exc)]})
             return False
@@ -95,4 +99,5 @@ def sign_in_to_aem(environment: dict) -> bool:
 
 def sign_out_of_aem(environment: dict) -> None:
     st.session_state["aem_ui_sessions"].pop(environment["id"], None)
+    aem_browser.close_window(environment["id"])
 

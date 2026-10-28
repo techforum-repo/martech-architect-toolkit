@@ -45,13 +45,15 @@ On the **Settings** page:
 2. Add a **website mapping**: the published domain, the URL prefix and the
    content root it maps to (for example `/us/en` → `/content/site/us/en`).
    Only domains with a mapping can be scanned.
-3. Click **Sign in to AEM** for the environment. A browser window opens on
-   author; sign in as usual (Adobe SSO) and it closes by itself. That one
-   sign-in is used for every AEM lookup and for Page Properties screenshots.
-   It is kept in memory for the session only, so sign in again after
-   restarting the app or when AEM ends the session; the app asks when needed.
-   A Local Development Token can be used instead (optional, under the
-   environment), and is needed only for the command-line scripts.
+3. Click **Sign in to AEM** for the environment. An AEM window opens; sign
+   in as usual (Adobe SSO) and **keep that window open**: AEM's UI only trusts
+   the browser you signed in with, so screenshots are taken in it. Once you're
+   signed in, the window is read-only (write requests are blocked, also for
+   anything done in it by hand). The sign-in is also used for every AEM
+   lookup and is kept in memory for the session only; closing the window or
+   restarting the app means signing in again. A Local Development Token can
+   be used instead (optional, under the environment) for lookups and for
+   authors that accept it for their UI.
 
 ### Non-production sites behind a login
 
@@ -137,8 +139,9 @@ to the field is opened, outermost first, and the caption shows the path (for
 example "Analytics › Tracking"). Page Properties of any other page can be captured from
 **Screenshot another page's properties**. In mock mode a sample author is used.
 
-Screenshots use your AEM sign-in. If you're not signed in yet, the app shows
-**Sign in to AEM author** and takes the screenshots right after. The sign-in
+Screenshots are taken in the AEM window you signed in with. If it isn't open,
+the app asks you to **Sign in to AEM** at the top and takes the screenshots
+right after. The sign-in
 is kept in memory for the session only, never on disk, because it works like
 a password for your AEM account.
 

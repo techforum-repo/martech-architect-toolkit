@@ -219,9 +219,52 @@ def _identity(storage_state: dict | None, browser_version: str) -> tuple[dict | 
     return state, storage_state.get("user_agent") or _desktop_user_agent(browser_version)
 
 
+def _capture_in_page(page, author_base: str, urls: list[str], term: str, blocked: list[str],
+                     timeout: int) -> dict:
+    """In an already open tab: open the first of urls that renders, then
+    screenshot each field containing term."""
+    url, response = urls[0], None
+    for url in urls:
+        response = page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+        if not response or response.status != 404:
+            break
+    try:
+        page.wait_for_load_state("networkidle", timeout=15_000)
+    except PlaywrightTimeout:
+        pass
+    page.wait_for_timeout(500)  # a sign-in redirect may happen in script
+
+    landed = page.url.lower()
+    sign_in_page = _is_sign_in_page(landed)
+    if sign_in_page or not landed.startswith(author_base.lower().rstrip("/")):
+        where = page.url.split("?")[0]
+        raise AemLoginRequired(
+            f"The dialog opened {'a sign-in page' if sign_in_page else 'a different page'} "
+            f"instead: {where}", landed=where, title=page.title(), sign_in_page=sign_in_page)
+
+    fields = page.evaluate(FIND_FIELDS_SCRIPT, term)
+    captured = []
+    for field in fields[:10]:
+        if page.evaluate(SHOW_FIELD_SCRIPT, [field["marker"], field["depth"]]):
+            page.wait_for_timeout(300 + 200 * field["depth"])  # tab switches and scroll
+            captured.append({
+                "label": field["label"], "name": field["name"], "value": field["value"],
+                "tabs": field["tabs"], "visible": page.evaluate(FIELD_VISIBLE_SCRIPT, field["marker"]),
+                "image": page.screenshot(full_page=False, animations="disabled"),
+            })
+
+    return {
+        "url": url,
+        "status": response.status if response else None,
+        "fields": captured,
+        "page_image": None if captured else page.screenshot(full_page=False, animations="disabled"),
+        "blocked_writes": list(blocked),
+    }
+
+
 def _capture_dialogs(author_base: str, urls: list[str], term: str, token: str | None, *,
                      show_browser: bool, timeout: int, storage_state: dict | None, prepare_context) -> dict:
-    """Open the first of urls that renders, then screenshot each field containing term."""
+    """In a new browser: open the first of urls that renders and screenshot matching fields."""
     blocked: list[str] = []
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=not show_browser)
@@ -233,45 +276,7 @@ def _capture_dialogs(author_base: str, urls: list[str], term: str, token: str | 
             if prepare_context:
                 prepare_context(context)
             _guard(context, author_base, token, blocked)  # registered last: runs first
-            page = context.new_page()
-
-            url = urls[0]
-            for url in urls:
-                response = page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
-                if not response or response.status != 404:
-                    break
-            try:
-                page.wait_for_load_state("networkidle", timeout=15_000)
-            except PlaywrightTimeout:
-                pass
-            page.wait_for_timeout(500)  # a sign-in redirect may happen in script
-
-            landed = page.url.lower()
-            sign_in_page = _is_sign_in_page(landed)
-            if sign_in_page or not landed.startswith(author_base.lower().rstrip("/")):
-                where = page.url.split("?")[0]
-                raise AemLoginRequired(
-                    f"The dialog opened {'a sign-in page' if sign_in_page else 'a different page'} "
-                    f"instead: {where}", landed=where, title=page.title(), sign_in_page=sign_in_page)
-
-            fields = page.evaluate(FIND_FIELDS_SCRIPT, term)
-            captured = []
-            for field in fields[:10]:
-                if page.evaluate(SHOW_FIELD_SCRIPT, [field["marker"], field["depth"]]):
-                    page.wait_for_timeout(300 + 200 * field["depth"])  # tab switches and scroll
-                    captured.append({
-                        "label": field["label"], "name": field["name"], "value": field["value"],
-                        "tabs": field["tabs"], "visible": page.evaluate(FIELD_VISIBLE_SCRIPT, field["marker"]),
-                        "image": page.screenshot(full_page=False, animations="disabled"),
-                    })
-
-            return {
-                "url": url,
-                "status": response.status if response else None,
-                "fields": captured,
-                "page_image": None if captured else page.screenshot(full_page=False, animations="disabled"),
-                "blocked_writes": blocked,
-            }
+            return _capture_in_page(context.new_page(), author_base, urls, term, blocked, timeout)
         finally:
             browser.close()
 
