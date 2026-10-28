@@ -44,8 +44,13 @@ On the **Settings** page:
 2. Add a **website mapping**: the published domain, the URL prefix and the
    content root it maps to (for example `/us/en` → `/content/site/us/en`).
    Only domains with a mapping can be scanned.
-3. Add your AEM **Local Development Token** for the environment, kept for the
-   session only or encrypted on this machine (key in the OS credential store).
+3. Click **Sign in to AEM** for the environment. A browser window opens on
+   author; sign in as usual (Adobe SSO) and it closes by itself. That one
+   sign-in is used for every AEM lookup and for Page Properties screenshots.
+   It is kept in memory for the session only, so sign in again after
+   restarting the app or when AEM ends the session; the app asks when needed.
+   A Local Development Token can be used instead (optional, under the
+   environment), and is needed only for the command-line scripts.
 
 ### Non-production sites behind a login
 
@@ -110,9 +115,8 @@ on whichever dialog tab it is. Any other page's properties can be captured
 from **Screenshot another page's properties**. In mock mode a sample dialog
 and sample sign-in are used.
 
-**Sign-in.** Many authors accept the AEM token for data lookups but not for
-their UI pages. The app then shows **Sign in to AEM author**: a browser window
-opens on author, you sign in as usual, and it closes by itself. The sign-in
+Screenshots use your AEM sign-in. If you're not signed in yet, the app shows
+**Sign in to AEM author** and takes the screenshots right after. The sign-in
 is kept in memory for the session only, never on disk, because it works like
 a password for your AEM account.
 

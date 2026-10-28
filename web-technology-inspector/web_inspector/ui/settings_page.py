@@ -13,6 +13,7 @@ from ..token_store import (
     save_token,
     delete_token,
 )
+from .shared import sign_in_to_aem, sign_out_of_aem, signed_in
 
 
 def render():
@@ -90,7 +91,6 @@ def render():
                 session_token=session_token
             )
 
-            st.info(auth["message"])
 
             with st.form("edit_environment"):
                 edit_name = st.text_input(
@@ -120,78 +120,101 @@ def render():
                     save("aem_environments.json", "environments", envs)
                     st.rerun()
 
-            st.subheader("AEM Developer Console Authentication")
-
+            st.subheader("Sign in to AEM")
             st.caption(
-                "Supports long AEM Developer Console tokens. "
-                "Persistent tokens are encrypted locally, with "
-                "the encryption key stored in the OS credential vault."
+                "Opens a browser window on this author: sign in as usual "
+                "(Adobe SSO) and it closes by itself. Used for AEM lookups "
+                "and Page Properties screenshots. Kept in memory for this "
+                "session only, so sign in again after restarting the app."
             )
 
-            storage_mode = st.radio(
-                "Token storage",
-                ["Encrypted local storage", "Session only"],
-                horizontal=True,
-                key="aem_storage_mode"
-            )
+            if signed_in(env):
+                st.success("Signed in for this session.")
+                if st.button("Sign out", key="aem_sign_out"):
+                    sign_out_of_aem(env)
+                    st.rerun()
+            elif st.button("Sign in to AEM", type="primary", key="settings_sign_in"):
+                if sign_in_to_aem(env):
+                    st.toast("Signed in to AEM")
+                    st.rerun()
 
-            with st.form("environment_token"):
-                token = st.text_area(
-                    "AEM Developer Console Access Token",
-                    height=120,
-                    placeholder="Paste your access token",
-                    help="Token contents are never displayed in reports."
+            with st.expander("Use a Local Development Token instead (optional)"):
+                st.caption(
+                    "Token status: " + auth["message"] + ". A token is only "
+                    "used when you are not signed in, and is needed for the "
+                    "command-line scripts."
                 )
-                store = st.form_submit_button(
-                    "Save / Replace Token"
+
+                st.caption(
+                    "Supports long AEM Developer Console tokens. "
+                    "Persistent tokens are encrypted locally, with "
+                    "the encryption key stored in the OS credential vault."
                 )
 
-            if store:
-                try:
-                    if not token.strip():
-                        st.error("Enter an access token.")
-                    elif storage_mode == "Session only":
-                        if "session_aem_tokens" not in st.session_state:
-                            st.session_state["session_aem_tokens"] = {}
+                storage_mode = st.radio(
+                    "Token storage",
+                    ["Encrypted local storage", "Session only"],
+                    horizontal=True,
+                    key="aem_storage_mode"
+                )
 
-                        identity = (
-                            env["id"]
-                            + "|"
-                            + env["author_base"].rstrip("/")
-                        )
-
-                        st.session_state["session_aem_tokens"][identity] = token.strip()
-
-                        st.toast("Session token configured")
-                        st.rerun()
-                    else:
-                        save_token(env, token)
-                        st.toast("Encrypted token saved")
-                        st.rerun()
-                except Exception as exc:
-                    st.error(
-                        "Credential storage failed: "
-                        + type(exc).__name__
+                with st.form("environment_token"):
+                    token = st.text_area(
+                        "AEM Developer Console Access Token",
+                        height=120,
+                        placeholder="Paste your access token",
+                        help="Token contents are never displayed in reports."
+                    )
+                    store = st.form_submit_button(
+                        "Save / Replace Token"
                     )
 
-            identity = (
-                env["id"]
-                + "|"
-                + env["author_base"].rstrip("/")
-            )
+                if store:
+                    try:
+                        if not token.strip():
+                            st.error("Enter an access token.")
+                        elif storage_mode == "Session only":
+                            if "session_aem_tokens" not in st.session_state:
+                                st.session_state["session_aem_tokens"] = {}
 
-            if st.button("Clear Session Token"):
-                st.session_state.get(
-                    "session_aem_tokens", {}
-                ).pop(identity, None)
-                st.rerun()
+                            identity = (
+                                env["id"]
+                                + "|"
+                                + env["author_base"].rstrip("/")
+                            )
 
-            if st.button("Remove Token"):
-                try:
-                    delete_token(env)
+                            st.session_state["session_aem_tokens"][identity] = token.strip()
+
+                            st.toast("Session token configured")
+                            st.rerun()
+                        else:
+                            save_token(env, token)
+                            st.toast("Encrypted token saved")
+                            st.rerun()
+                    except Exception as exc:
+                        st.error(
+                            "Credential storage failed: "
+                            + type(exc).__name__
+                        )
+
+                identity = (
+                    env["id"]
+                    + "|"
+                    + env["author_base"].rstrip("/")
+                )
+
+                if st.button("Clear Session Token"):
+                    st.session_state.get(
+                        "session_aem_tokens", {}
+                    ).pop(identity, None)
                     st.rerun()
-                except Exception as exc:
-                    st.error(type(exc).__name__)
+
+                if st.button("Remove Token"):
+                    try:
+                        delete_token(env)
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(type(exc).__name__)
 
             if st.button("Delete Environment"):
                 if any(

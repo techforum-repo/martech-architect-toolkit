@@ -141,7 +141,7 @@ class TestRealModeErrors(unittest.TestCase):
             ENVIRONMENT, "x", "t", roots=("/content",)
         )[0]
         self.assertEqual(result["status"], "error")
-        self.assertIn("Blocked", result["message"])
+        self.assertIn("Sign in again", result["message"])  # a redirect means AEM's sign-in page
         self.assertFalse(request.call_args.kwargs["allow_redirects"])
 
     @patch("web_inspector.aem_client.requests.request")

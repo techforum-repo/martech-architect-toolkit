@@ -28,20 +28,39 @@ def _same_domain_mapping(url: str, mappings: list[dict]) -> dict | None:
     return next((m for m in mappings if m["published_domain"].lower() == host), None)
 
 
-def environment_token(environment: dict, session_tokens: dict | None) -> dict:
-    """token_status() for the environment, preferring a session-only token."""
+def environment_auth(environment: dict, session_tokens: dict | None = None,
+                     ui_sessions: dict | None = None) -> dict:
+    """How to authenticate to the environment: its author sign-in if there is
+    one, else a token (session-only first, then saved). Returns
+    {"status", "message", "auth", "method"}; "auth" is None when neither exists."""
     if aem_lookup.is_mock(environment):
-        return {"status": "available", "message": "Mock environment", "token": "mock-token"}
+        return {"status": "available", "message": "Mock environment", "auth": "mock-token", "method": "mock"}
+    signed_in = aem_lookup.session_auth(environment, (ui_sessions or {}).get(environment["id"]))
+    if signed_in:
+        return {"status": "available", "message": "Signed in to AEM", "auth": signed_in, "method": "sign-in"}
     identity = environment["id"] + "|" + environment["author_base"].rstrip("/")
-    return token_status(environment, session_token=(session_tokens or {}).get(identity))
+    status = token_status(environment, session_token=(session_tokens or {}).get(identity))
+    if status["status"] == "missing":
+        status = dict(status, message="Not signed in to AEM")
+    return dict(status, auth=status.pop("token"), method="token" if status["status"] not in
+                ("missing", "expired", "unavailable") else None)
+
+
+def needs_sign_in(result: dict) -> bool:
+    """The AEM stage couldn't authenticate, or AEM said the sign-in ended."""
+    stage = result.get("stages", {}).get("aem", {})
+    detail = stage.get("detail", "")
+    return (stage.get("status") == "unavailable" and ("signed in" in detail.lower() or "expired" in detail.lower())) \
+        or "Sign in again" in detail
 
 
 def run_investigation(url: str, mappings: list[dict], environments: list[dict], *,
                       mock: bool, device: str = "desktop", consent: str = "none",
                       show_browser: bool = False, timeout: int = 45, settle: int = 6,
-                      session_tokens: dict | None = None,
+                      session_tokens: dict | None = None, ui_sessions: dict | None = None,
                       site_login: dict | None = None) -> dict:
-    """site_login: Basic-auth {"username", "password"} for the website, if it needs one."""
+    """site_login: Basic-auth {"username", "password"} for the website, if it needs one.
+    ui_sessions: author sign-ins by environment id (see environment_auth)."""
     log = get_logger()
     result = {
         "url": url,
@@ -53,6 +72,7 @@ def run_investigation(url: str, mappings: list[dict], environments: list[dict], 
         "technologies": [],
         "domains": [],
         "mapping": None,
+        "mapping_config": None,
         "environment": None,
         "aem_page": None,
         "site_login": bool(site_login),
@@ -66,6 +86,7 @@ def run_investigation(url: str, mappings: list[dict], environments: list[dict], 
         stage("mapping", "unavailable", "No website mapping for this domain (see Settings)")
         return result
     result["mapping"] = mapping["name"]
+    result["mapping_config"] = mapping
     stage("mapping", "complete")
 
     # Browser scan
@@ -104,10 +125,22 @@ def run_investigation(url: str, mappings: list[dict], environments: list[dict], 
         stage("aem", "unavailable", "The mapping's AEM environment is not configured")
         return result
     result["environment"] = environment
+    lookup_aem_page(result, session_tokens=session_tokens, ui_sessions=ui_sessions)
+    return result
 
-    auth = environment_token(environment, session_tokens)
-    if auth["status"] in ("missing", "expired", "unavailable"):
-        stage("aem", "unavailable", auth["message"])
+
+def lookup_aem_page(result: dict, *, session_tokens: dict | None = None,
+                    ui_sessions: dict | None = None) -> dict:
+    """(Re)run the AEM stage of an investigation, e.g. after signing in."""
+    url, mapping, environment = result["url"], result["mapping_config"], result["environment"]
+
+    def stage(status, detail=""):
+        result["stages"]["aem"] = {"status": status, "detail": detail}
+
+    auth = environment_auth(environment, session_tokens, ui_sessions)
+    if not auth["auth"]:
+        result["aem_page"] = None
+        stage("unavailable", auth["message"])
         return result
 
     try:
@@ -117,19 +150,23 @@ def run_investigation(url: str, mappings: list[dict], environments: list[dict], 
 
     page = None
     if content_path:
-        page = aem_lookup.verify_page(environment, content_path, auth["token"])
+        page = aem_lookup.verify_page(environment, content_path, auth["auth"])
         page["method"] = "Prefix mapping, confirmed on author"
-    if not page or page["status"] != "found":
-        vanity = aem_lookup.find_vanity(environment, urlsplit(url).path, auth["token"])
+    # A vanity URL is tried only when the mapped page doesn't exist; an error
+    # (e.g. an expired sign-in) would fail the same way, so it is reported as is.
+    if page is None or page["status"] == "not_found":
+        vanity = aem_lookup.find_vanity(environment, urlsplit(url).path, auth["auth"])
         if vanity["status"] == "found":
-            page = aem_lookup.verify_page(environment, vanity["pages"][0], auth["token"])
+            page = aem_lookup.verify_page(environment, vanity["pages"][0], auth["auth"])
             page["method"] = f"Vanity URL {vanity['vanity']}"
+        elif vanity["status"] == "error":
+            page = {"status": "error", "message": vanity["message"]}
         elif page is None:
             page = {"status": "not_found", "message": "Outside the mapped prefix and no vanity URL matched"}
 
     result["aem_page"] = page
-    stage("aem", "complete" if page["status"] == "found" else page["status"],
-          page.get("content_path", "") or page.get("message", ""))
+    stage("complete" if page["status"] == "found" else page["status"],
+          page.get("content_path", "") if page["status"] == "found" else page.get("message", ""))
     return result
 
 
@@ -137,7 +174,7 @@ SEARCH_SCOPES = ("page", "repository")
 
 
 def analyze_target(result: dict, target: str, *, session_tokens: dict | None = None,
-                   search_aem: bool = True, scope: str = "page") -> dict:
+                   ui_sessions: dict | None = None, search_aem: bool = True, scope: str = "page") -> dict:
     """Browser attribution plus, optionally, AEM references for one target.
 
     scope "page": the page and what it uses (its fragments, parent pages,
@@ -148,11 +185,11 @@ def analyze_target(result: dict, target: str, *, session_tokens: dict | None = N
     references: list[dict] = []
     environment = result.get("environment")
     if search_aem and environment and target.strip():
-        auth = environment_token(environment, session_tokens)
+        auth = environment_auth(environment, session_tokens, ui_sessions)
         page = result.get("aem_page") or {}
-        if auth.get("token") and scope == "page" and page.get("status") == "found":
+        if auth["auth"] and scope == "page" and page.get("status") == "found":
             folders = aem_code_folders((result.get("browser") or {}).get("requests", []))
-            references = aem_lookup.search_page_scope(environment, page, target.strip(), auth["token"], folders)
-        elif auth.get("token"):
-            references = aem_lookup.search_references(environment, target.strip(), auth["token"])
+            references = aem_lookup.search_page_scope(environment, page, target.strip(), auth["auth"], folders)
+        elif auth["auth"]:
+            references = aem_lookup.search_references(environment, target.strip(), auth["auth"])
     return {"findings": findings, "aem_references": references}

@@ -196,23 +196,30 @@ def validate_request(method, url, origins=None):
     return method
 
 
-def aem_request(method, url, token, origins=None):
-    """Execute an authorized read-only request."""
+def aem_request(method, url, auth, origins=None):
+    """Execute an authorized read-only request.
+
+    auth is either an AEM token (str, sent as a Bearer header) or
+    {"cookies": {...}}: the login cookies of an author sign-in.
+    """
 
     method = validate_request(method, url, origins)
 
-    if not isinstance(token, str) or not token.strip():
-        raise ValueError("AEM bearer token is required")
+    headers = {"Accept": "application/json"}
+    cookies = None
 
-    headers = {
-        "Authorization": "Bearer " + token.strip(),
-        "Accept": "application/json"
-    }
+    if isinstance(auth, str) and auth.strip():
+        headers["Authorization"] = "Bearer " + auth.strip()
+    elif isinstance(auth, dict) and auth.get("cookies"):
+        cookies = dict(auth["cookies"])
+    else:
+        raise ValueError("AEM sign-in or token is required")
 
     response = requests.request(
         method,
         url,
         headers=headers,
+        cookies=cookies,
         timeout=20,
         allow_redirects=False
     )

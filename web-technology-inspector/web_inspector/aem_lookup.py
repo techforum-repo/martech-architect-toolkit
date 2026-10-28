@@ -24,7 +24,7 @@ from .aem_client import (
 
 # What each HTTP status most likely means for these endpoints.
 STATUS_MESSAGES = {
-    401: "AEM rejected the token; it may have expired",
+    401: "AEM rejected the sign-in or token; it may have expired. Sign in again",
     403: "Your AEM user is not allowed to call this endpoint",
     404: "Not found",
 }
@@ -39,8 +39,24 @@ def _origin(environment):
     return {(parsed.scheme, parsed.netloc.lower())}
 
 
-def _get_json(environment, url, token):
-    """Return (http_status, payload or None, message)."""
+# Shown when AEM answers with a redirect, which for these JSON endpoints
+# means its sign-in page: the session has ended.
+SIGN_IN_AGAIN = "AEM sent the request to its sign-in page; the sign-in has expired. Sign in again"
+
+
+def session_auth(environment, storage_state):
+    """Auth for aem_request from an author sign-in: its cookies for the author host only."""
+    host = urlsplit(environment["author_base"]).hostname or ""
+    cookies = {
+        c["name"]: c["value"]
+        for c in (storage_state or {}).get("cookies", [])
+        if host == c["domain"].lstrip(".") or host.endswith("." + c["domain"].lstrip("."))
+    }
+    return {"cookies": cookies} if cookies else None
+
+
+def _get_json(environment, url, auth):
+    """Return (http_status, payload or None, message). auth: see aem_client.aem_request."""
 
     if is_mock(environment):
         # Validate exactly as a real request would be.
@@ -53,14 +69,18 @@ def _get_json(environment, url, token):
         return 200, response.json(), "OK"
 
     try:
-        response = aem_request("GET", url, token, _origin(environment))
+        response = aem_request("GET", url, auth, _origin(environment))
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else 0
         return status, None, STATUS_MESSAGES.get(status, "HTTP " + str(status))
     except AEMSecurityError as exc:
+        if "redirects" in str(exc):
+            return 302, None, SIGN_IN_AGAIN
         return 0, None, "Blocked: " + str(exc)
     except requests.RequestException as exc:
         return 0, None, "Connection failed: " + type(exc).__name__
+    except ValueError:
+        return 0, None, "Not signed in to AEM"
 
     try:
         return response.status_code, response.json(), "OK"
@@ -85,11 +105,11 @@ def querybuilder_url(environment, parameters):
     )
 
 
-def verify_page(environment, content_path, token):
+def verify_page(environment, content_path, auth):
     """Confirm the page exists by reading only its jcr:content node."""
 
     status, node, message = _get_json(
-        environment, page_node_url(environment, content_path), token
+        environment, page_node_url(environment, content_path), auth
     )
 
     if node is None:
@@ -123,7 +143,7 @@ def _page_path(node_path):
     return node_path.split("/jcr:content", 1)[0]
 
 
-def find_vanity(environment, published_path, token, root="/content"):
+def find_vanity(environment, published_path, auth, root="/content"):
     """Find pages whose sling:vanityPath matches the published path."""
 
     vanity = published_path.rstrip("/") or "/"
@@ -140,7 +160,7 @@ def find_vanity(environment, published_path, token, root="/content"):
             ("p.hits", "selective"),
             ("p.properties", "jcr:path"),
         ]),
-        token,
+        auth,
     )
 
     if payload is None:
@@ -157,7 +177,7 @@ def find_vanity(environment, published_path, token, root="/content"):
     }
 
 
-def _fulltext(environment, root, term, token, limit=20, scope=""):
+def _fulltext(environment, root, term, auth, limit=20, scope=""):
     """One QueryBuilder full-text search under root, as a result entry."""
     status, payload, message = _get_json(
         environment,
@@ -169,7 +189,7 @@ def _fulltext(environment, root, term, token, limit=20, scope=""):
             ("p.hits", "selective"),
             ("p.properties", "jcr:path sling:resourceType"),
         ]),
-        token,
+        auth,
     )
     entry = {"scope": scope or root, "root": root, "http_status": status, "message": message}
 
@@ -189,16 +209,16 @@ def _fulltext(environment, root, term, token, limit=20, scope=""):
                 total=payload.get("total", len(hits)), hits=hits)
 
 
-def search_references(environment, term, token, roots=QUERYBUILDER_ROOTS, limit=20):
+def search_references(environment, term, auth, roots=QUERYBUILDER_ROOTS, limit=20):
     """Full-text search each whole root (/content, /conf, /apps) for the term."""
-    return [_fulltext(environment, root, term, token, limit) for root in roots]
+    return [_fulltext(environment, root, term, auth, limit) for root in roots]
 
 
 MAX_FRAGMENTS = 10
 MAX_ANCESTORS = 8
 
 
-def fragments_used(environment, page_path, token):
+def fragments_used(environment, page_path, auth):
     """Experience fragment variations the page references."""
     status, payload, _ = _get_json(
         environment,
@@ -210,7 +230,7 @@ def fragments_used(environment, page_path, token):
             ("p.hits", "selective"),
             ("p.properties", "fragmentVariationPath"),
         ]),
-        token,
+        auth,
     )
     if payload is None:
         return []
@@ -229,12 +249,12 @@ def _ancestors(page_path):
     return ["/" + "/".join(parts[:depth]) for depth in range(2, len(parts))][-MAX_ANCESTORS:]
 
 
-def inherited_properties(environment, page_path, term, token):
+def inherited_properties(environment, page_path, term, auth):
     """Parent pages' own properties that mention the term (one node read each)."""
     lowered = term.lower()
     hits = []
     for ancestor in _ancestors(page_path):
-        status, node, _ = _get_json(environment, page_node_url(environment, ancestor), token)
+        status, node, _ = _get_json(environment, page_node_url(environment, ancestor), auth)
         if node is None:
             continue  # not a page, or not readable
         for name, value in node.items():
@@ -258,29 +278,29 @@ def _site_conf(template):
     return None
 
 
-def search_page_scope(environment, page, term, token, code_folders=()):
+def search_page_scope(environment, page, term, auth, code_folders=()):
     """Search only the page and the shared things it uses.
 
     page: verify_page() result for the page (content_path, template).
     code_folders: /apps/<project> folders from the page's clientlib URLs.
     """
     page_path = page["content_path"]
-    results = [_fulltext(environment, page_path + "/jcr:content", term, token, scope="This page")]
+    results = [_fulltext(environment, page_path + "/jcr:content", term, auth, scope="This page")]
 
-    for fragment in fragments_used(environment, page_path, token):
-        results.append(_fulltext(environment, fragment, term, token, scope="Experience fragment"))
+    for fragment in fragments_used(environment, page_path, auth):
+        results.append(_fulltext(environment, fragment, term, auth, scope="Experience fragment"))
 
-    results.append(inherited_properties(environment, page_path, term, token))
+    results.append(inherited_properties(environment, page_path, term, auth))
 
     template = page.get("template") or ""
     if template.startswith("/conf/"):
-        results.append(_fulltext(environment, template, term, token, scope="Page template"))
+        results.append(_fulltext(environment, template, term, auth, scope="Page template"))
         site_conf = _site_conf(template)
         if site_conf:
-            results.append(_fulltext(environment, site_conf + "/settings/wcm/policies", term, token,
+            results.append(_fulltext(environment, site_conf + "/settings/wcm/policies", term, auth,
                                      scope="Site policies"))
 
     for folder in code_folders:
-        results.append(_fulltext(environment, folder, term, token, scope="Site code"))
+        results.append(_fulltext(environment, folder, term, auth, scope="Site code"))
 
     return results

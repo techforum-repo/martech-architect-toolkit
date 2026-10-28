@@ -10,15 +10,15 @@ import pandas as pd
 import streamlit as st
 
 from .. import aem_lookup, aem_mock, database, mock_scan, site_credentials
-from ..aem_screens import AemLoginRequired, SignInIncomplete, capture_page_properties, sign_in
+from ..aem_screens import AemLoginRequired, capture_page_properties
 from ..errors import friendly_error
 from ..config import settings
 from ..detection import EXPECTED_BEFORE_CONSENT, aem_code_folders, consent_violations
-from ..investigation import analyze_target, environment_token, run_investigation
+from ..investigation import analyze_target, environment_auth, lookup_aem_page, needs_sign_in, run_investigation
 from ..report import build_report, dot_graph, html_report, request_graph, requests_csv, stage_label
 from ..site_config import load, match
 from ..targets import available_targets
-from .shared import megabytes, show_error
+from .shared import megabytes, show_error, sign_in_to_aem, signed_in
 
 CONSENT_MODES = {
     "Leave the consent banner alone": "none",
@@ -67,7 +67,7 @@ def _run_form(mappings: list[dict], mock: bool) -> None:
                 url, *_configuration(mock), mock=mock, device=device, consent=consent,
                 show_browser=show_browser, timeout=settings.scan_timeout,
                 settle=settings.settle_seconds, session_tokens=st.session_state["session_aem_tokens"],
-                site_login=login,
+                ui_sessions=st.session_state["aem_ui_sessions"], site_login=login,
             )
         result["consent_mode"] = consent
         if result.get("browser"):
@@ -194,6 +194,7 @@ def _analysis(result: dict, target: str, search_aem: bool, scope: str) -> dict:
     cache = st.session_state["analysis_cache"]
     if key not in cache:
         cache[key] = analyze_target(result, target, session_tokens=st.session_state["session_aem_tokens"],
+                                    ui_sessions=st.session_state["aem_ui_sessions"],
                                     search_aem=search_aem, scope=scope)
     return cache[key]
 
@@ -247,10 +248,10 @@ def _capture(result: dict, page: str, target: str) -> dict:
     ui_session = st.session_state["aem_ui_sessions"].get(environment["id"])
     token = None
     if not ui_session:
-        auth = environment_token(environment, st.session_state["session_aem_tokens"])
-        token = auth.get("token")
-        if not token:
-            return {"page": page, "error": {"title": "AEM token unavailable", "reasons": [auth["message"]]}}
+        auth = environment_auth(environment, st.session_state["session_aem_tokens"])
+        if not auth["auth"]:
+            return {"page": page, "sign_in": True}
+        token = auth["auth"]
     try:
         return {"page": page, "result": capture_page_properties(
             environment["author_base"], page, target.strip(), token, storage_state=ui_session,
@@ -283,24 +284,6 @@ def auto_capture(result: dict, analysis: dict, target: str, key: tuple) -> None:
         _capture_pages(result, pages, target, key)
     else:
         st.session_state["properties_captures"] = None
-
-
-def _sign_in(result: dict) -> bool:
-    environment = result["environment"]
-    mock = aem_lookup.is_mock(environment)
-    with st.spinner("A browser window is open on AEM author: sign in there. It closes by itself."):
-        try:
-            state = sign_in(environment["author_base"], show_browser=not mock,
-                            prepare_context=aem_mock.serve_author_ui if mock else None)
-        except SignInIncomplete as exc:
-            show_error({"title": "Not signed in", "reasons": [str(exc)]})
-            return False
-        except Exception as exc:  # noqa: BLE001 - shown to the user as a friendly error
-            error = friendly_error(exc)
-            show_error({"title": "Sign-in failed: " + error.title, "reasons": error.reasons})
-            return False
-    st.session_state["aem_ui_sessions"][environment["id"]] = state
-    return True
 
 
 def _show_captures(captures: dict, target: str) -> None:
@@ -341,8 +324,8 @@ def _properties_screenshot(result: dict, analysis: dict, target: str, key: tuple
         st.warning("AEM author asks for a sign-in before it shows its UI. Sign in once in the browser window "
                    "that opens; the screenshots are then taken automatically. The sign-in is kept in memory "
                    "for this session only.")
-        if st.button("Sign in to AEM author", type="primary"):
-            if _sign_in(result):
+        if st.button("Sign in to AEM author", type="primary", key="screenshot_sign_in"):
+            if sign_in_to_aem(result["environment"]):
                 _capture_pages(result, current["pages"], target, key)
                 st.rerun()
         return
@@ -352,8 +335,8 @@ def _properties_screenshot(result: dict, analysis: dict, target: str, key: tuple
     elif st.session_state.get("aem_searched") == key:
         st.caption("No page's own properties contain the target, so no screenshot was taken automatically.")
 
-    if environment["id"] in st.session_state["aem_ui_sessions"]:
-        st.caption("Signed in to AEM author for screenshots (this session).")
+    if signed_in(environment):
+        st.caption("Signed in to AEM author (this session).")
     with st.expander("Screenshot another page's properties"):
         page = st.selectbox("Page", _properties_pages(result, analysis), key="properties_page")
         if st.button("Screenshot Page Properties in AEM"):
@@ -361,9 +344,24 @@ def _properties_screenshot(result: dict, analysis: dict, target: str, key: tuple
             st.rerun()
 
 
+def _sign_in_prompt(result: dict, reason: str) -> None:
+    """Sign in, then rerun only the AEM stage of this scan."""
+    st.warning(f"{reason}. Sign in to AEM author once in the browser window that opens; the AEM lookups "
+               "then run for this scan. The sign-in is kept in memory for this session only.")
+    if st.button("Sign in to AEM", type="primary", key="aem_tab_sign_in"):
+        if sign_in_to_aem(result["environment"]):
+            lookup_aem_page(result, session_tokens=st.session_state["session_aem_tokens"],
+                            ui_sessions=st.session_state["aem_ui_sessions"])
+            st.session_state["analysis_cache"] = {}
+            st.rerun()
+
+
 def _aem_tab(result: dict, analysis: dict, target: str, searched: bool, key: tuple) -> None:
     page = result.get("aem_page")
     stage = result["stages"].get("aem", {})
+    if needs_sign_in(result):
+        _sign_in_prompt(result, stage.get("detail", ""))
+        return
     if not page:
         st.warning("AEM lookup unavailable: " + (stage.get("detail") or stage.get("status", "")))
         return
