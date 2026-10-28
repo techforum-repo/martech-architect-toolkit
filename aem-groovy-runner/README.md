@@ -201,8 +201,14 @@ declare `batch.mergeRows`. See [Whole-repository runs](#whole-repository-runs-ba
 
 **Scripts and formatters are independent.** A script doesn't know about
 formatting, and a formatter doesn't know about scripts. They are connected
-only by **links** in `formatter_links.json` at the project root: a small,
-reviewable file you can keep in git so a team shares the same links.
+only by **links**, kept in two files at the project root:
+
+- `formatter_links.default.json`: the shipped links, in git. Update it when
+  you add a script to the repository.
+- `formatter_links.json`: this machine's links, written by the Formatters
+  page and not kept in git, so using the app never leaves the checkout
+  modified. Its entry for a script wins; scripts it doesn't mention use the
+  shipped default.
 
 ```json
 {
@@ -217,9 +223,9 @@ reviewable file you can keep in git so a team shares the same links.
   each change is audited with before and after.
 - A script with no link (e.g. one you just added) is flagged **"not linked"**
   and falls back to Generic Excel until you link it.
-- On first start, if the file doesn't exist, it's created from where links
-  used to live: the manifest `formatters` lists and the old Scripts-page
-  mapping. After that, `formatters` in a manifest is ignored.
+- On first start, if `formatter_links.json` doesn't exist, it's created from
+  where links used to live: the manifest `formatters` lists and the old
+  Scripts-page mapping. After that, `formatters` in a manifest is ignored.
 
 **Per run:** the Run page's **"Format results with"** dropdown offers the
 script's linked formatters, starting with its default, plus **None (JSON

@@ -53,7 +53,7 @@ def test_migration_runs_once_and_later_sources_win(tmp_path):
 
 
 def test_shipped_links_cover_bundled_scripts():
-    links = fl.load()
+    links = fl.load(fl.DEFAULTS_PATH)
     for script in discover():
         link = fl.link_for(script.id, links)
         assert link.linked and not link.unknown, script.id
@@ -80,7 +80,28 @@ def test_redirected_links_path_is_honoured(tmp_path, monkeypatch):
     LINKS_PATH still wrote the project's real file."""
     target = tmp_path / "links.json"
     monkeypatch.setattr(fl, "LINKS_PATH", target)
-    real_before = (fl.PROJECT_ROOT / "formatter_links.json").read_text()
+    monkeypatch.setattr(fl, "DEFAULTS_PATH", tmp_path / "defaults.json")
+    real = fl.PROJECT_ROOT / "formatter_links.json"
+    real_before = real.read_text() if real.exists() else None
     fl.save({"x": (["generic-excel"], "generic-excel")})
     assert fl.load() == {"x": (["generic-excel"], "generic-excel")} and target.exists()
-    assert (fl.PROJECT_ROOT / "formatter_links.json").read_text() == real_before
+    assert (real.read_text() if real.exists() else None) == real_before
+
+
+def test_local_links_override_shipped_defaults(tmp_path, monkeypatch):
+    defaults, local = tmp_path / "defaults.json", tmp_path / "links.json"
+    monkeypatch.setattr(fl, "DEFAULTS_PATH", defaults)
+    monkeypatch.setattr(fl, "LINKS_PATH", local)
+    fl.save({"a": (["generic-excel"], "generic-excel"),
+             "new-script": (["asset-reference-excel"], "asset-reference-excel")}, defaults)
+    assert fl.load() == fl.load(defaults)  # no local file yet: shipped links apply
+    fl.save({"a": (["asset-reference-excel", "generic-excel"], "asset-reference-excel")})
+    merged = fl.load()
+    assert merged["a"] == (["asset-reference-excel", "generic-excel"], "asset-reference-excel")  # local wins
+    assert merged["new-script"] == (["asset-reference-excel"], "asset-reference-excel")  # shipped fills the gap
+    assert json.loads(defaults.read_text())["a"]["default"] == "generic-excel"  # defaults never rewritten
+
+
+def test_local_links_file_is_not_tracked():
+    ignored = (fl.PROJECT_ROOT / ".gitignore").read_text().splitlines()
+    assert "/formatter_links.json" in ignored and fl.DEFAULTS_PATH.exists()

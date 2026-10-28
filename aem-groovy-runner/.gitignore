@@ -103,3 +103,9 @@ Thumbs.db
 *.jar
 # groovyc output from compiling the stubs
 *.class
+
+# ==========================
+# This machine's formatter links (written by the Formatters page).
+# The shipped links are in formatter_links.default.json.
+# ==========================
+/formatter_links.json

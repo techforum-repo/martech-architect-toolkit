@@ -4,7 +4,13 @@ from __future__ import annotations
 
 Scripts (scripts/) know nothing about formatting, and formatters
 (groovy_runner/formatters/) know nothing about scripts. This module owns the
-only place they meet: `formatter_links.json` at the project root.
+only place they meet, two files at the project root:
+
+- `formatter_links.default.json`: the shipped links, kept in git.
+- `formatter_links.json`: this machine's links, written by the Formatters
+  page, not kept in git. Its entry for a script wins; scripts it doesn't
+  mention use the shipped default, so a newly bundled script is linked
+  without anyone editing their local file.
 
     {
       "asset-reference-report": {"formatters": ["asset-reference-excel", "generic-excel"],
@@ -12,9 +18,8 @@ only place they meet: `formatter_links.json` at the project root.
       "page-report": {"formatters": ["generic-excel"], "default": "generic-excel"}
     }
 
-It's a plain, reviewable file that can live in git, so links are shared
-with whoever uses the same checkout. It's edited from the Formatters page
-(every change is audited) or by hand.
+Both are plain JSON that can also be edited by hand. Changes on the
+Formatters page are audited.
 
 A script with no entry is "not linked": it falls back to Generic Excel and
 the UI flags it. When the file doesn't exist yet it is created once from
@@ -34,6 +39,7 @@ from .config import PROJECT_ROOT
 from .formatters import FORMATTERS
 
 LINKS_PATH = PROJECT_ROOT / "formatter_links.json"
+DEFAULTS_PATH = PROJECT_ROOT / "formatter_links.default.json"
 FALLBACK_FORMATTER = "generic-excel"
 
 
@@ -62,8 +68,17 @@ def _normalize(entry: Any) -> tuple[list[str], str] | None:
 
 
 def load(path: Path | None = None) -> dict[str, tuple[list[str], str]]:
-    """script id -> (formatter ids with the default first, default id)."""
-    path = path or LINKS_PATH  # resolved per call, so LINKS_PATH can be redirected (tests)
+    """script id -> (formatter ids with the default first, default id).
+
+    With no path: the shipped defaults overlaid with this machine's links.
+    With a path: that file only."""
+    if path is None:
+        # Resolved per call, so LINKS_PATH / DEFAULTS_PATH can be redirected (tests).
+        return {**_read(DEFAULTS_PATH), **_read(LINKS_PATH)}
+    return _read(path)
+
+
+def _read(path: Path) -> dict[str, tuple[list[str], str]]:
     if not path.exists():
         return {}
     try:
@@ -81,7 +96,8 @@ def load(path: Path | None = None) -> dict[str, tuple[list[str], str]]:
 
 
 def save(links: dict[str, tuple[list[str], str]], path: Path | None = None) -> None:
-    """Atomic write, sorted by script id so diffs stay readable."""
+    """Atomic write of this machine's links (never the shipped defaults),
+    sorted by script id so diffs stay readable."""
     path = path or LINKS_PATH
     data = {sid: {"formatters": ids, "default": default} for sid, (ids, default) in sorted(links.items())}
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".formatter_links.", suffix=".json")
