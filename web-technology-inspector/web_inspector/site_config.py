@@ -7,7 +7,7 @@ Existing configurations are never overwritten.
 import json
 import re
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 BASE = Path(__file__).resolve().parent.parent / "config"
 
@@ -114,6 +114,54 @@ def parse_domains(text):
         return None
 
     return sorted(domains)
+
+
+def clean_mapping(name, domain, prefix, root):
+    """Normalise a website mapping form and explain anything still wrong.
+
+    Accepts what people paste: a full URL or "host/" in the domain field,
+    a prefix without its leading slash, stray spaces. Returns
+    (values, errors); values are only usable when errors is empty.
+    """
+
+    errors = []
+    name = (name or "").strip()
+    domain = (domain or "").strip().lower()
+    prefix = (prefix or "").strip()
+    root = (root or "").strip().rstrip("/")
+
+    if "://" in domain or "/" in domain or "@" in domain:
+        try:
+            parsed = urlsplit(domain if "://" in domain else "https://" + domain)
+            if parsed.username or parsed.password:
+                errors.append("Published domain: leave out user names and passwords (use Basic Authentication below).")
+            if parsed.port not in (None, 443):
+                errors.append("Published domain: only the standard HTTPS port is supported.")
+            domain = parsed.hostname or ""
+        except ValueError:
+            domain = ""
+    elif ":" in domain:
+        errors.append("Published domain: only the standard HTTPS port is supported.")
+        domain = domain.split(":", 1)[0]
+
+    prefix = "/" + prefix.lstrip("/")
+    prefix = prefix.rstrip("/") or "/"
+
+    if not name:
+        errors.append("Website name: enter a name.")
+    if not DOMAIN.match(domain):
+        errors.append("Published domain: enter a host name like www.example.com.")
+    if any(part in (".", "..") for part in prefix.split("/")) or " " in prefix:
+        errors.append("Published URL prefix: use a path like /us/en, or / for the whole site.")
+    if not root.startswith("/content/") or any(part in (".", "..") for part in root.split("/")):
+        errors.append("AEM content root: enter a path under /content/, like /content/site/us/en.")
+
+    return {
+        "name": name,
+        "published_domain": domain,
+        "published_prefix": prefix,
+        "content_root": root,
+    }, errors
 
 
 def match(url, mappings):

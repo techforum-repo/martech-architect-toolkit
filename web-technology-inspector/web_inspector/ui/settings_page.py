@@ -7,7 +7,7 @@ import streamlit as st
 
 from .. import site_credentials
 from ..config import settings
-from ..site_config import load, parse_domains, save, valid_author
+from ..site_config import clean_mapping, load, parse_domains, save, valid_author
 from ..token_store import (
     token_status,
     save_token,
@@ -212,37 +212,6 @@ def render():
     with tab2:
         st.subheader("Website Mappings")
 
-        def mapping_valid(name, domain, prefix, root):
-            from urllib.parse import urlsplit
-
-            domain = domain.strip().lower()
-            prefix = prefix.rstrip("/") or "/"
-            root = root.rstrip("/")
-
-            try:
-                parsed = urlsplit("https://" + domain)
-
-                return (
-                    bool(name.strip())
-                    and bool(domain)
-                    and parsed.hostname == domain
-                    and parsed.port is None
-                    and not parsed.username
-                    and not parsed.password
-                    and prefix.startswith("/")
-                    and root.startswith("/content/")
-                    and all(
-                        part not in (".", "..")
-                        for part in prefix.split("/")
-                    )
-                    and all(
-                        part not in (".", "..")
-                        for part in root.split("/")
-                    )
-                )
-            except ValueError:
-                return False
-
         if not envs:
             st.warning("Create an AEM environment first.")
 
@@ -359,21 +328,17 @@ def render():
                     )
 
                 if save_new:
-                    domain = domain.strip().lower()
-                    prefix = prefix.rstrip("/") or "/"
-                    root = root.rstrip("/")
+                    values, errors = clean_mapping(name, domain, prefix, root)
                     first_party_domains = parse_domains(first_party)
 
                     duplicate = any(
-                        m["published_domain"].lower() == domain
-                        and m["published_prefix"] == prefix
+                        m["published_domain"].lower() == values["published_domain"]
+                        and m["published_prefix"] == values["published_prefix"]
                         for m in mappings
                     )
 
-                    if not mapping_valid(
-                        name, domain, prefix, root
-                    ):
-                        st.error("Please enter valid mapping details.")
+                    if errors:
+                        st.error("\n\n".join(errors))
 
                     elif first_party_domains is None:
                         st.error(
@@ -389,10 +354,7 @@ def render():
 
                     else:
                         mappings.append({
-                            "name": name.strip(),
-                            "published_domain": domain,
-                            "published_prefix": prefix,
-                            "content_root": root,
+                            **values,
                             "first_party_domains": first_party_domains,
                             "environment_id": eid
                         })
@@ -498,27 +460,22 @@ def render():
 
                 if save_edit:
 
-                    edit_domain = edit_domain.strip().lower()
-                    edit_prefix = edit_prefix.rstrip("/") or "/"
-                    edit_root = edit_root.rstrip("/")
+                    values, errors = clean_mapping(
+                        edit_name, edit_domain, edit_prefix, edit_root
+                    )
                     edit_first_party_domains = parse_domains(edit_first_party)
 
                     duplicate = any(
                         i != selected_index
                         and item["published_domain"].lower()
-                            == edit_domain
+                            == values["published_domain"]
                         and item["published_prefix"]
-                            == edit_prefix
+                            == values["published_prefix"]
                         for i, item in enumerate(mappings)
                     )
 
-                    if not mapping_valid(
-                        edit_name,
-                        edit_domain,
-                        edit_prefix,
-                        edit_root
-                    ):
-                        st.error("Invalid mapping details.")
+                    if errors:
+                        st.error("\n\n".join(errors))
 
                     elif edit_first_party_domains is None:
                         st.error(
@@ -534,10 +491,7 @@ def render():
 
                     else:
                         mappings[selected_index] = {
-                            "name": edit_name.strip(),
-                            "published_domain": edit_domain,
-                            "published_prefix": edit_prefix,
-                            "content_root": edit_root,
+                            **values,
                             "first_party_domains": edit_first_party_domains,
                             "environment_id": edit_env
                         }
