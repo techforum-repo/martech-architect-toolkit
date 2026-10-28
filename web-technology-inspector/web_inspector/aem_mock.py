@@ -174,7 +174,10 @@ def _dialog(page_path):
         f"<coral-panelstack><coral-panel>{fields(basic)}</coral-panel>"
         f"<coral-panel style='display:none'>{fields(advanced)}</coral-panel></coral-panelstack>"
         "<script>function show(i){document.querySelectorAll('coral-panel')"
-        ".forEach((p,n)=>p.style.display=n===i?'':'none')}</script></body></html>"
+        ".forEach((p,n)=>p.style.display=n===i?'':'none')}"
+        # Like an author that only accepts its own login session for UI pages.
+        "if(!document.cookie.includes('login-token'))location.href='https://ims.example.test/ims/login'"
+        "</script></body></html>"
     )
 
 
@@ -182,9 +185,15 @@ def serve_author_ui(context):
     """Playwright route handler serving the sample author UI (mock mode)."""
     def handle(route):
         url = urlsplit(route.request.url)
-        if url.path == "/mnt/overlay/wcm/core/content/sites/properties.html":
+        if url.path == "/aem/start.html":
+            # Sample sign-in: author sets its login cookie straight away.
+            route.fulfill(status=200, content_type="text/html", body="<title>AEM Start (sample)</title>",
+                          headers={"Set-Cookie": "login-token=sample; Path=/; Secure"})
+        elif url.path == "/mnt/overlay/wcm/core/content/sites/properties.html":
             route.fulfill(status=200, content_type="text/html",
                           body=_dialog(dict(parse_qsl(url.query)).get("item", "")))
+        elif url.hostname == "ims.example.test":
+            route.fulfill(status=200, content_type="text/html", body="<title>Sign in (sample)</title>")
         else:
             route.fulfill(status=200, body=b"")
 

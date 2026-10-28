@@ -24,6 +24,10 @@ def init_session_state() -> None:
         "session_aem_tokens": {},
         # Session-only Basic-auth credentials for websites, keyed by domain.
         "session_site_credentials": {},
+        # Author UI sign-ins for screenshots (browser cookies), keyed by environment id.
+        # Memory only: they work like a password for the AEM account.
+        "aem_ui_sessions": {},
+        "properties_captures": None,
         "result": None,
         "analysis_cache": {},
     }

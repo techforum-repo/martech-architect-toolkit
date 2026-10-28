@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from .. import aem_lookup, aem_mock, database, mock_scan, site_credentials
-from ..aem_screens import AemLoginRequired, capture_page_properties
+from ..aem_screens import AemLoginRequired, SignInIncomplete, capture_page_properties, sign_in
 from ..errors import friendly_error
 from ..config import settings
 from ..detection import EXPECTED_BEFORE_CONSENT, aem_code_folders, consent_violations
@@ -222,70 +222,146 @@ def _groovy_hint(result: dict, target: str) -> None:
     )
 
 
+MAX_AUTO_SCREENSHOTS = 3
+
+
 def _properties_pages(result: dict, analysis: dict) -> list[str]:
     """The scanned page, then any page whose own properties matched the search."""
-    pages = [result["aem_page"]["content_path"]]
-    for entry in analysis["aem_references"]:
-        for hit in entry["hits"]:
-            if hit["node_path"].endswith("/jcr:content"):
-                pages.append(hit["page_path"])
-    return list(dict.fromkeys(pages))
+    return list(dict.fromkeys([result["aem_page"]["content_path"]] + _matched_property_pages(analysis)))
 
 
-def _properties_screenshot(result: dict, analysis: dict, target: str) -> None:
-    st.subheader("Page Properties screenshot")
-    st.caption("Opens Page Properties on author with your token and highlights the fields that contain "
-               "the target. Read-only: the browser blocks every write request and clicks only dialog tabs.")
+def _matched_property_pages(analysis: dict) -> list[str]:
+    """Pages whose own properties (their jcr:content node) contain the target."""
+    return list(dict.fromkeys(
+        hit["page_path"]
+        for entry in analysis["aem_references"]
+        for hit in entry["hits"]
+        if hit["node_path"].endswith("/jcr:content")
+    ))
+
+
+def _capture(result: dict, page: str, target: str) -> dict:
+    """One Page Properties capture as {"page", "result"} or {"page", "error"}."""
+    environment = result["environment"]
+    mock = aem_lookup.is_mock(environment)
+    ui_session = st.session_state["aem_ui_sessions"].get(environment["id"])
+    token = None
+    if not ui_session:
+        auth = environment_token(environment, st.session_state["session_aem_tokens"])
+        token = auth.get("token")
+        if not token:
+            return {"page": page, "error": {"title": "AEM token unavailable", "reasons": [auth["message"]]}}
+    try:
+        return {"page": page, "result": capture_page_properties(
+            environment["author_base"], page, target.strip(), token, storage_state=ui_session,
+            show_browser=settings.show_browser,
+            prepare_context=aem_mock.serve_author_ui if mock else None)}
+    except AemLoginRequired:
+        st.session_state["aem_ui_sessions"].pop(environment["id"], None)  # expired or never worked
+        return {"page": page, "sign_in": True}
+    except Exception as exc:  # noqa: BLE001 - shown to the user as a friendly error
+        error = friendly_error(exc)
+        return {"page": page, "error": {"title": error.title, "reasons": error.reasons}}
+
+
+def _capture_pages(result: dict, pages: list[str], target: str, key: tuple) -> None:
+    """Capture each page, stopping at the first sign-in request."""
+    items = []
+    with st.spinner("Taking Page Properties screenshots on author..."):
+        for page in pages:
+            item = _capture(result, page, target)
+            items.append(item)
+            if item.get("sign_in"):
+                break
+    st.session_state["properties_captures"] = {"key": key, "items": items, "pages": pages}
+
+
+def auto_capture(result: dict, analysis: dict, target: str, key: tuple) -> None:
+    """After Search AEM: screenshot the pages whose properties matched."""
+    pages = _matched_property_pages(analysis)[:MAX_AUTO_SCREENSHOTS]
+    if pages:
+        _capture_pages(result, pages, target, key)
+    else:
+        st.session_state["properties_captures"] = None
+
+
+def _sign_in(result: dict) -> bool:
+    environment = result["environment"]
+    mock = aem_lookup.is_mock(environment)
+    with st.spinner("A browser window is open on AEM author: sign in there. It closes by itself."):
+        try:
+            state = sign_in(environment["author_base"], show_browser=not mock,
+                            prepare_context=aem_mock.serve_author_ui if mock else None)
+        except SignInIncomplete as exc:
+            show_error({"title": "Not signed in", "reasons": [str(exc)]})
+            return False
+        except Exception as exc:  # noqa: BLE001 - shown to the user as a friendly error
+            error = friendly_error(exc)
+            show_error({"title": "Sign-in failed: " + error.title, "reasons": error.reasons})
+            return False
+    st.session_state["aem_ui_sessions"][environment["id"]] = state
+    return True
+
+
+def _show_captures(captures: dict, target: str) -> None:
+    for item in captures["items"]:
+        st.markdown(f"**{item['page']}**")
+        if item.get("error"):
+            show_error({"title": "Screenshot failed: " + item["error"]["title"], "reasons": item["error"]["reasons"]})
+            continue
+        if item.get("sign_in"):
+            continue
+        shot = item["result"]
+        if not shot["fields"]:
+            st.caption(f"No field in this page's properties contains “{target}”. The dialog as opened:")
+            st.image(shot["page_image"], width="stretch")
+        for index, field in enumerate(shot["fields"], 1):
+            st.image(field["image"], width="stretch",
+                     caption=f"{field['label'] or field['name']} = {field['value'][:120]}")
+            st.download_button("Download screenshot", field["image"],
+                               f"page-properties-{item['page'].rsplit('/', 1)[-1]}-{index}.png", "image/png",
+                               key=f"properties_download_{item['page']}_{index}")
+        if shot["blocked_writes"]:
+            st.caption(f"{len(shot['blocked_writes'])} write request(s) from the author UI were blocked.")
+
+
+def _properties_screenshot(result: dict, analysis: dict, target: str, key: tuple) -> None:
+    st.subheader("Page Properties screenshots")
+    st.caption("Taken on author for each page whose properties contain the target, highlighting the field. "
+               "Read-only: the browser blocks every write request and clicks only dialog tabs.")
     if not target.strip():
         st.info("Choose or type a target above.")
         return
+
     environment = result["environment"]
-    page = st.selectbox("Page", _properties_pages(result, analysis), key="properties_page")
-    if st.button("Screenshot Page Properties in AEM"):
-        auth = environment_token(environment, st.session_state["session_aem_tokens"])
-        if not auth.get("token"):
-            st.warning("AEM token unavailable: " + auth["message"])
-            return
-        with st.spinner("Opening Page Properties on author..."):
-            try:
-                st.session_state["properties_capture"] = {
-                    "key": (page, target),
-                    "result": capture_page_properties(
-                        environment["author_base"], page, target.strip(), auth["token"],
-                        show_browser=settings.show_browser,
-                        prepare_context=aem_mock.serve_author_ui if aem_lookup.is_mock(environment) else None),
-                }
-            except AemLoginRequired as exc:
-                st.session_state["properties_capture"] = None
-                show_error({"title": "AEM showed its sign-in page", "reasons": [
-                    str(exc),
-                    "This author accepts the token for data lookups but not for its UI pages",
-                    "Tell the developer: the app can add a one-time browser sign-in for screenshots",
-                ]})
-                return
-            except Exception as exc:  # noqa: BLE001 - shown to the user as a friendly error
-                st.session_state["properties_capture"] = None
-                error = friendly_error(exc)
-                show_error({"title": "Screenshot failed: " + error.title, "reasons": error.reasons})
-                return
+    captures = st.session_state.get("properties_captures")
+    current = captures if captures and captures["key"] == key else None
 
-    capture = st.session_state.get("properties_capture")
-    if not capture or capture["key"] != (page, target):
+    if current and any(item.get("sign_in") for item in current["items"]):
+        st.warning("AEM author asks for a sign-in before it shows its UI. Sign in once in the browser window "
+                   "that opens; the screenshots are then taken automatically. The sign-in is kept in memory "
+                   "for this session only.")
+        if st.button("Sign in to AEM author", type="primary"):
+            if _sign_in(result):
+                _capture_pages(result, current["pages"], target, key)
+                st.rerun()
         return
-    shot = capture["result"]
-    if not shot["fields"]:
-        st.info(f"No field in this page's properties contains “{target}”. The dialog as opened:")
-        st.image(shot["page_image"], width="stretch")
-    for index, field in enumerate(shot["fields"], 1):
-        st.image(field["image"], width="stretch",
-                 caption=f"{field['label'] or field['name']} = {field['value'][:120]}")
-        st.download_button("Download screenshot", field["image"], f"page-properties-{index}.png", "image/png",
-                           key=f"properties_download_{index}")
-    if shot["blocked_writes"]:
-        st.caption(f"{len(shot['blocked_writes'])} write request(s) from the author UI were blocked.")
+
+    if current:
+        _show_captures(current, target)
+    elif st.session_state.get("aem_searched") == key:
+        st.caption("No page's own properties contain the target, so no screenshot was taken automatically.")
+
+    if environment["id"] in st.session_state["aem_ui_sessions"]:
+        st.caption("Signed in to AEM author for screenshots (this session).")
+    with st.expander("Screenshot another page's properties"):
+        page = st.selectbox("Page", _properties_pages(result, analysis), key="properties_page")
+        if st.button("Screenshot Page Properties in AEM"):
+            _capture_pages(result, [page], target, key)
+            st.rerun()
 
 
-def _aem_tab(result: dict, analysis: dict, target: str, searched: bool) -> None:
+def _aem_tab(result: dict, analysis: dict, target: str, searched: bool, key: tuple) -> None:
     page = result.get("aem_page")
     stage = result["stages"].get("aem", {})
     if not page:
@@ -319,9 +395,9 @@ def _aem_tab(result: dict, analysis: dict, target: str, searched: bool) -> None:
         if not code or not any(e["hits"] for e in code):
             _groovy_hint(result, target)
 
-    if page["status"] == "found":
+    if page["status"] == "found" and searched:
         st.divider()
-        _properties_screenshot(result, analysis, target)
+        _properties_screenshot(result, analysis, target, key)
 
 
 def _report_tab(result: dict, browser: dict, analysis: dict, target: str) -> None:
@@ -371,10 +447,13 @@ def render() -> None:
     scope = SCOPES[scope_label]
     searched = col2.button("Search AEM", disabled=not (target.strip() and result.get("aem_page")),
                            help="Read-only search on author for this target")
+    key = (result["timestamp"], target, scope)
     if searched:
-        st.session_state["aem_searched"] = (result["timestamp"], target, scope)
-    search_aem = st.session_state.get("aem_searched") == (result["timestamp"], target, scope)
+        st.session_state["aem_searched"] = key
+    search_aem = st.session_state.get("aem_searched") == key
     analysis = _analysis(result, target, search_aem, scope)
+    if searched and page_found:
+        auto_capture(result, analysis, target, key)
 
     tabs = st.tabs(["Technologies", "Third parties", "Consent & cookies", "How it was added",
                     "AEM", "Dependency graph", "Screenshot", "Report"])
@@ -387,7 +466,7 @@ def render() -> None:
     with tabs[3]:
         _attribution_tab(analysis, target)
     with tabs[4]:
-        _aem_tab(result, analysis, target, search_aem)
+        _aem_tab(result, analysis, target, search_aem, key)
     with tabs[5]:
         edges = request_graph(browser)
         if edges:

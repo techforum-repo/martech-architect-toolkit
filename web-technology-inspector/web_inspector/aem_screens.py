@@ -1,6 +1,11 @@
 """Screenshots of AEM author UI, e.g. a page's Page Properties with the
 field that holds a value highlighted.
 
+Authors that don't accept the AEM token for UI pages need a one-time
+sign-in (sign_in): a visible browser opens on author, the user logs in as
+usual, and the resulting browser session is reused for screenshots. That
+session works like a password, so callers keep it in memory only.
+
 Read-only by construction, because author UI pages run their own scripts:
 - every request that isn't GET, HEAD or OPTIONS is aborted, on any host;
 - the AEM token is added only to requests to the author origin, never to
@@ -58,14 +63,55 @@ SHOW_FIELD_SCRIPT = """([marker, tab]) => {
 
 
 class AemLoginRequired(RuntimeError):
-    """Author redirected to its login page: the token isn't accepted for UI pages."""
+    """Author redirected to its login page: the token or sign-in isn't accepted for UI pages."""
+
+
+class SignInIncomplete(RuntimeError):
+    """The sign-in window was closed, or the time ran out, before author was reached."""
+
+
+def _signed_in(page, context, author_base: str) -> bool:
+    author_host = urlsplit(author_base).hostname
+    on_author = page.url.lower().startswith(author_base.lower().rstrip("/")) and "login" not in page.url.lower()
+    has_session = any(
+        c["name"] == "login-token" and author_host.endswith(c["domain"].lstrip("."))
+        for c in context.cookies()
+    )
+    return on_author and has_session
+
+
+def sign_in(author_base: str, *, timeout: int = 300, show_browser: bool = True,
+            prepare_context=None) -> dict:
+    """Open author in a browser, wait for the user to log in, return the session.
+
+    Returns Playwright storage state (cookies) for reuse in capture calls.
+    The window closes by itself once author is reached with a login session.
+    """
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=not show_browser)
+        try:
+            context = browser.new_context(viewport={"width": 1280, "height": 900})
+            if prepare_context:
+                prepare_context(context)
+            page = context.new_page()
+            page.goto(author_base.rstrip("/") + "/aem/start.html", wait_until="domcontentloaded",
+                      timeout=60_000)
+            for _ in range(timeout):
+                if page.is_closed():
+                    raise SignInIncomplete("The sign-in window was closed before signing in")
+                if _signed_in(page, context, author_base):
+                    return context.storage_state()
+                page.wait_for_timeout(1000)
+            raise SignInIncomplete(f"Not signed in within {timeout // 60} minutes")
+        finally:
+            browser.close()
 
 
 def properties_url(author_base: str, page_path: str) -> str:
     return author_base.rstrip("/") + PROPERTIES_PATH + "?item=" + quote(page_path, safe="/")
 
 
-def _guard(context, author_base: str, token: str, blocked: list[str]) -> None:
+def _guard(context, author_base: str, token: str | None, blocked: list[str]) -> None:
     author = urlsplit(author_base)
     origin = f"{author.scheme}://{author.netloc}".lower()
 
@@ -76,7 +122,7 @@ def _guard(context, author_base: str, token: str, blocked: list[str]) -> None:
             route.abort()
             return
         url = urlsplit(request.url)
-        if f"{url.scheme}://{url.netloc}".lower() == origin:
+        if token and f"{url.scheme}://{url.netloc}".lower() == origin:
             route.fallback(headers={**request.headers, "authorization": "Bearer " + token})
         else:
             route.fallback()
@@ -84,10 +130,13 @@ def _guard(context, author_base: str, token: str, blocked: list[str]) -> None:
     context.route("**/*", handle)
 
 
-def capture_page_properties(author_base: str, page_path: str, term: str, token: str, *,
+def capture_page_properties(author_base: str, page_path: str, term: str, token: str | None, *,
                             show_browser: bool = False, timeout: int = 60,
-                            prepare_context=None) -> dict:
+                            storage_state: dict | None = None, prepare_context=None) -> dict:
     """Open Page Properties for the page and screenshot each field containing term.
+
+    Authenticates with the AEM token, or with a sign_in() session passed as
+    storage_state (token may then be None).
 
     Returns {"url", "fields": [{"label", "name", "value", "image"}], "page_image",
     "blocked_writes"}. Raises AemLoginRequired when author shows its login page.
@@ -101,7 +150,8 @@ def capture_page_properties(author_base: str, page_path: str, term: str, token: 
         browser = playwright.chromium.launch(headless=not show_browser)
         try:
             context = browser.new_context(viewport={"width": 1440, "height": 1000},
-                                          service_workers="block", accept_downloads=False)
+                                          service_workers="block", accept_downloads=False,
+                                          storage_state=storage_state)
             if prepare_context:
                 prepare_context(context)
             _guard(context, author_base, token, blocked)  # registered last: runs first

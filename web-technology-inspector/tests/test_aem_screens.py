@@ -3,7 +3,14 @@ routing (no network). Skipped when Chromium isn't installed."""
 
 import unittest
 
-from web_inspector.aem_screens import AemLoginRequired, capture_page_properties, properties_url
+from web_inspector import aem_mock
+from web_inspector.aem_screens import (
+    AemLoginRequired,
+    SignInIncomplete,
+    capture_page_properties,
+    properties_url,
+    sign_in,
+)
 from tests.test_scanner import browser_available
 
 AUTHOR = "https://author-p1-e2.adobeaemcloud.com"
@@ -77,6 +84,33 @@ class PagePropertiesCaptureTests(unittest.TestCase):
         with self.assertRaises(AemLoginRequired):
             capture_page_properties(AUTHOR, "/content/site/us/en/products", "x", TOKEN,
                                     prepare_context=fixture([], login=True))
+
+
+@unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
+class SignInTests(unittest.TestCase):
+    """The sample author: UI pages need its login cookie, the token alone is not enough."""
+    AUTHOR = aem_mock.ENVIRONMENT["author_base"]
+
+    def capture(self, **kwargs):
+        return capture_page_properties(self.AUTHOR, "/content/example/us/en", "tracking.example.com",
+                                       prepare_context=aem_mock.serve_author_ui, **kwargs)
+
+    def test_token_alone_reaches_sign_in_page(self):
+        with self.assertRaises(AemLoginRequired):
+            self.capture(token="t")
+
+    def test_sign_in_session_is_reused_for_screenshots(self):
+        state = sign_in(self.AUTHOR, show_browser=False, prepare_context=aem_mock.serve_author_ui)
+        self.assertIn("login-token", {c["name"] for c in state["cookies"]})
+        result = self.capture(token=None, storage_state=state)
+        self.assertEqual([f["label"] for f in result["fields"]], ["analyticsTrackingDomain"])
+
+    def test_sign_in_times_out(self):
+        def never_signed_in(context):
+            context.route("**/*", lambda route: route.fulfill(status=200, content_type="text/html",
+                                                              body="<title>Sign in</title>"))
+        with self.assertRaises(SignInIncomplete):
+            sign_in(self.AUTHOR, timeout=2, show_browser=False, prepare_context=never_signed_in)
 
 
 if __name__ == "__main__":

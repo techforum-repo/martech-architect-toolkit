@@ -103,17 +103,22 @@ which is a quick way to check what your AEM user may call:
 
 ### Page Properties screenshots
 
-In the **AEM** tab, **Screenshot Page Properties in AEM** opens Page
-Properties on author for the scanned page, or a parent page whose properties
-matched the search, with your token. It finds the fields containing the
-target on any dialog tab and shows a screenshot of each, with the field
-highlighted. In mock mode it uses a sample dialog.
+When **Search AEM** finds the target in a page's own properties (the scanned
+page or a parent page), the app opens Page Properties on author for up to
+three such pages and shows a screenshot of each matching field, highlighted,
+on whichever dialog tab it is. Any other page's properties can be captured
+from **Screenshot another page's properties**. In mock mode a sample dialog
+and sample sign-in are used.
 
-The author UI runs its own scripts, so the browser is locked down: every
-request that isn't a read is blocked, the token is attached only to requests
-to your author, and nothing is clicked except dialog tabs. If your author
-sends the browser to its sign-in page (the token isn't accepted for UI
-pages), the app says so.
+**Sign-in.** Many authors accept the AEM token for data lookups but not for
+their UI pages. The app then shows **Sign in to AEM author**: a browser window
+opens on author, you sign in as usual, and it closes by itself. The sign-in
+is kept in memory for the session only, never on disk, because it works like
+a password for your AEM account.
+
+The author UI runs its own scripts, so the screenshot browser is locked down:
+every request that isn't a read is blocked, the token (when used) is attached
+only to requests to your author, and nothing is clicked except dialog tabs.
 
 `scripts/aem_screenshot_spike.py` does the same from the command line and
 saves the images under `data/screenshots/`.
