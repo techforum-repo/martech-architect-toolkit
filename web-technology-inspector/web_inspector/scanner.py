@@ -66,6 +66,14 @@ class ScanBlocked(RuntimeError):
     """The website answered with a bot-protection or access-denied page."""
 
 
+class AuthRequired(RuntimeError):
+    """The website asked for a username and password (HTTP 401)."""
+
+    def __init__(self, message: str, *, credentials_sent: bool):
+        super().__init__(message)
+        self.credentials_sent = credentials_sent
+
+
 def _desktop_user_agent(browser_version: str) -> str:
     # Headless Chromium announces "HeadlessChrome", which many sites block
     # outright; present as the same Chrome version on Windows instead.
@@ -116,13 +124,18 @@ def _accept_consent(page) -> str | None:
 
 def scan(url: str, *, device: str = "desktop", consent: str = "none",
          show_browser: bool = False, timeout: int = 45, settle: int = 6,
-         prepare_context=None) -> dict:
+         http_credentials: dict | None = None, prepare_context=None,
+         launch_args: list[str] | None = None) -> dict:
     """Load the page in Chromium and return the observed evidence.
 
     device: "desktop" or "mobile". consent: "none" (never touch the banner)
     or "accept" (accept it after the first settle and split the evidence).
+    http_credentials: Playwright Basic-auth credentials for the site itself
+    (see site_credentials.browser_credentials); None for public sites.
     prepare_context: optional callable given the browser context before the
     page opens; the tests use it to serve fixture pages without a network.
+    launch_args: extra Chromium flags; the tests use them to reach a local
+    HTTPS server (request interception bypasses Basic-auth handling).
     """
     parsed = urlparse(url)
     if parsed.scheme != "https" or not parsed.hostname:
@@ -134,12 +147,14 @@ def scan(url: str, *, device: str = "desktop", consent: str = "none",
     state = {"phase": "before_consent" if consent == "accept" else "page_load"}
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=not show_browser)
+        browser = playwright.chromium.launch(headless=not show_browser, args=launch_args or [])
         try:
             if device == "mobile":
                 options = dict(playwright.devices[MOBILE_DEVICE])
             else:
                 options = dict(DESKTOP, user_agent=_desktop_user_agent(browser.version))
+            if http_credentials:
+                options["http_credentials"] = http_credentials
             context = browser.new_context(service_workers="block", accept_downloads=False, **options)
             if prepare_context:
                 prepare_context(context)
@@ -216,7 +231,14 @@ def scan(url: str, *, device: str = "desktop", consent: str = "none",
             main_status = response.status if response else None
             title = page.title()
 
-            if (main_status in (401, 403, 429)) or (
+            if main_status == 401:
+                scheme = (response.headers.get("www-authenticate", "") or "").split(" ")[0] or "unknown"
+                raise AuthRequired(
+                    f"The website answered HTTP 401 (authentication scheme: {scheme})",
+                    credentials_sent=bool(http_credentials),
+                )
+
+            if (main_status in (403, 429)) or (
                 BLOCK_PAGE_TITLE.search(title or "") and len(entries) <= 5
             ):
                 raise ScanBlocked(

@@ -47,6 +47,21 @@ On the **Settings** page:
 3. Add your AEM **Local Development Token** for the environment, kept for the
    session only or encrypted on this machine (key in the OS credential store).
 
+### Non-production sites behind a login
+
+For stage or QA sites protected with HTTP Basic authentication, add the
+username and password under **Settings → Website Mappings → Basic
+Authentication**, for the session only or saved encrypted on this machine
+(key in the OS credential store).
+
+- The browser answers the site's login challenge only for that domain; the
+  credentials are never sent to the third parties the page loads.
+- They are never written to the mappings file, scan history, reports or logs.
+- A site that asks for a login without credentials, or rejects them, gets a
+  clear message instead of a failed scan.
+- Don't put credentials in the URL (`https://user:pass@host`): it is rejected,
+  because URLs are stored in history and reports.
+
 ## How AEM lookups work
 
 All AEM access is read-only `GET` requests, checked in `web_inspector/aem_client.py`

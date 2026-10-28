@@ -28,6 +28,17 @@ def friendly_error(exc: BaseException) -> FriendlyError:
     message = str(exc).strip()
     lowered = message.lower()
 
+    if name == "AuthRequired":
+        if getattr(exc, "credentials_sent", False):
+            return FriendlyError("The website rejected the saved username or password", [
+                message,
+                "Check the Basic authentication credentials for this domain under Settings → Website Mappings",
+                "They may have been changed or rotated for this environment",
+            ], retryable=False)
+        return FriendlyError("This website needs a username and password", [
+            message,
+            "Add Basic authentication credentials for this domain under Settings → Website Mappings",
+        ], retryable=False)
     if name == "ScanBlocked":
         return FriendlyError("The website blocked the automated browser", [message] + _BLOCKED_REASONS)
     if "err_http2_protocol_error" in lowered or "err_connection_reset" in lowered:

@@ -22,6 +22,8 @@ def init_session_state() -> None:
         "mock_mode": settings.mock_mode,
         # Session-only AEM tokens, keyed by "<environment id>|<author URL>".
         "session_aem_tokens": {},
+        # Session-only Basic-auth credentials for websites, keyed by domain.
+        "session_site_credentials": {},
         "result": None,
         "analysis_cache": {},
     }

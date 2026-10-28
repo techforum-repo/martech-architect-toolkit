@@ -5,6 +5,7 @@ import uuid
 import pandas as pd
 import streamlit as st
 
+from .. import site_credentials
 from ..config import settings
 from ..site_config import load, parse_domains, save, valid_author
 from ..token_store import (
@@ -589,3 +590,70 @@ def render():
 
                         st.toast("Website mapping deleted")
                         st.rerun()
+
+        if mappings:
+            st.divider()
+            _basic_auth_section(mappings)
+
+
+def _basic_auth_section(mappings):
+    """Credentials for non-production sites behind HTTP Basic authentication."""
+
+    st.subheader("Basic Authentication")
+    st.caption(
+        "For non-production sites that ask for a username and password. "
+        "Sent only to that domain during scans, never to third parties, "
+        "and never written to mappings, history or reports."
+    )
+
+    domains = sorted({m["published_domain"].lower() for m in mappings})
+    domain = st.selectbox("Website domain", domains, key="basic_auth_domain")
+
+    session_credentials = st.session_state["session_site_credentials"]
+    credentials, source = site_credentials.resolve(domain, session_credentials)
+
+    if credentials:
+        st.info(
+            f"Signing in as **{credentials['username']}** "
+            + ("(this session only)." if source == "session" else "(saved, encrypted).")
+        )
+    else:
+        st.caption("No credentials: scans of this domain are anonymous.")
+
+    with st.form("basic_auth_" + domain):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        storage = st.radio(
+            "Keep credentials",
+            ["This session only", "Saved, encrypted on this machine"],
+            horizontal=True,
+        )
+        submitted = st.form_submit_button("Save Credentials")
+
+    if submitted:
+        if not site_credentials.valid(username, password):
+            st.error("Enter a username (without ':') and a password.")
+        elif storage == "This session only":
+            session_credentials[domain] = {
+                "username": username.strip(),
+                "password": password,
+            }
+            st.toast("Credentials set for this session")
+            st.rerun()
+        else:
+            try:
+                site_credentials.save(domain, username, password)
+                session_credentials.pop(domain, None)
+                st.toast("Credentials saved (encrypted)")
+                st.rerun()
+            except Exception as exc:
+                st.error("Credential storage failed: " + type(exc).__name__)
+
+    if credentials and st.button("Remove Credentials", key="remove_basic_auth"):
+        session_credentials.pop(domain, None)
+        try:
+            site_credentials.delete(domain)
+        except Exception as exc:
+            st.error("Credential storage failed: " + type(exc).__name__)
+        st.rerun()
+

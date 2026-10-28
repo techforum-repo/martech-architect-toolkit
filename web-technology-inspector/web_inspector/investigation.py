@@ -15,6 +15,7 @@ from .detection import detect_technologies, domain_summary
 from .errors import friendly_error
 from .logging_setup import get_logger
 from .mapping import resolve
+from .site_credentials import browser_credentials
 from .site_config import match
 from .token_store import token_status
 from .url_safety import validate_public_url
@@ -38,7 +39,9 @@ def environment_token(environment: dict, session_tokens: dict | None) -> dict:
 def run_investigation(url: str, mappings: list[dict], environments: list[dict], *,
                       mock: bool, device: str = "desktop", consent: str = "none",
                       show_browser: bool = False, timeout: int = 45, settle: int = 6,
-                      session_tokens: dict | None = None) -> dict:
+                      session_tokens: dict | None = None,
+                      site_login: dict | None = None) -> dict:
+    """site_login: Basic-auth {"username", "password"} for the website, if it needs one."""
     log = get_logger()
     result = {
         "url": url,
@@ -52,6 +55,7 @@ def run_investigation(url: str, mappings: list[dict], environments: list[dict], 
         "mapping": None,
         "environment": None,
         "aem_page": None,
+        "site_login": bool(site_login),
     }
 
     def stage(name, status, detail=""):
@@ -72,7 +76,8 @@ def run_investigation(url: str, mappings: list[dict], environments: list[dict], 
             validate_public_url(url, {m["published_domain"].lower() for m in mappings})
             from .scanner import scan  # imported late: Playwright is only needed for real scans
             browser = scan(url, device=device, consent=consent, show_browser=show_browser,
-                           timeout=timeout, settle=settle)
+                           timeout=timeout, settle=settle,
+                           http_credentials=browser_credentials(urlsplit(url).hostname or "", site_login))
         result["browser"] = browser
         stage("browser", "complete", f"{len(browser['requests'])} requests")
         log.info("scan url=%s device=%s consent=%s requests=%d", url, device, consent,

@@ -3,7 +3,16 @@ routing, so no network is used. Skipped when the browser isn't installed."""
 
 import unittest
 
-from web_inspector.scanner import BLOCK_PAGE_TITLE, ScanBlocked, _desktop_user_agent, scan
+import base64
+import datetime
+import ssl
+import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+from web_inspector.scanner import BLOCK_PAGE_TITLE, AuthRequired, ScanBlocked, _desktop_user_agent, scan
+from web_inspector.site_credentials import browser_credentials
 
 SITE = "https://www.example.test"
 
@@ -101,5 +110,108 @@ class ScannerBrowserTests(unittest.TestCase):
             scan(SITE + "/blocked.html", settle=1, prepare_context=serve)
 
 
-if __name__ == "__main__":
-    unittest.main()
+EXPECTED_AUTH = "Basic " + base64.b64encode(b"qa-user:s3cret").decode()
+
+
+class _Handler(BaseHTTPRequestHandler):
+    """Stage site behind Basic auth, plus a third-party script host, on one server."""
+    seen: list = []
+
+    def do_GET(self):  # noqa: N802 - http.server API
+        host = self.headers.get("Host", "").split(":")[0]
+        auth = self.headers.get("Authorization")
+        type(self).seen.append((host, self.path, auth))
+        if host == "stage.example.test":
+            if auth != EXPECTED_AUTH:
+                self.send_response(401)
+                self.send_header("WWW-Authenticate", 'Basic realm="stage"')
+                self.end_headers()
+                return
+            body = b"<title>Stage</title><script src='https://vendor.example.net/tag.js'></script>"
+            content_type = "text/html"
+        else:
+            body, content_type = b"1;", "application/javascript"
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def _self_signed(directory):
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "stage.example.test")])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+            .serial_number(x509.random_serial_number()).not_valid_before(now)
+            .not_valid_after(now + datetime.timedelta(days=1))
+            .add_extension(x509.SubjectAlternativeName([x509.DNSName("stage.example.test"),
+                                                        x509.DNSName("vendor.example.net")]), critical=False)
+            .sign(key, hashes.SHA256()))
+    cert_path, key_path = Path(directory) / "cert.pem", Path(directory) / "key.pem"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                           serialization.NoEncryption()))
+    return cert_path, key_path
+
+
+@unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
+class BasicAuthTests(unittest.TestCase):
+    """A real HTTPS server, so the browser's own Basic-auth handling runs."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.folder = tempfile.TemporaryDirectory()
+        cert, key = _self_signed(cls.folder.name)
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, key)
+        cls.server.socket = context.wrap_socket(cls.server.socket, server_side=True)
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+        port = cls.server.server_address[1]
+        cls.args = [
+            f"--host-resolver-rules=MAP stage.example.test:443 127.0.0.1:{port},"
+            f" MAP vendor.example.net:443 127.0.0.1:{port}",
+            "--ignore-certificate-errors",  # the fixture's certificate is self-signed
+        ]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.folder.cleanup()
+
+    def setUp(self):
+        _Handler.seen = []
+
+    def run_scan(self, password=None):
+        login = browser_credentials("stage.example.test", {"username": "qa-user", "password": password}) \
+            if password else None
+        return scan("https://stage.example.test/page.html", settle=1, http_credentials=login,
+                    launch_args=self.args)
+
+    def test_signs_in_only_to_the_site(self):
+        result = self.run_scan("s3cret")
+        self.assertEqual((result["main_status"], result["title"]), (200, "Stage"))
+        site = [auth for host, _, auth in _Handler.seen if host == "stage.example.test"]
+        third_party = [auth for host, _, auth in _Handler.seen if host == "vendor.example.net"]
+        # Standard Basic-auth handshake: unauthenticated, 401 challenge, then the retry with credentials.
+        self.assertEqual(site, [None, EXPECTED_AUTH])
+        self.assertTrue(third_party, "the third-party script should have been requested")
+        self.assertEqual(set(third_party), {None})  # the password never leaves the site
+
+    def test_missing_credentials(self):
+        with self.assertRaises(AuthRequired) as raised:
+            self.run_scan()
+        self.assertFalse(raised.exception.credentials_sent)
+
+    def test_wrong_credentials(self):
+        with self.assertRaises(AuthRequired) as raised:
+            self.run_scan("wrong")
+        self.assertTrue(raised.exception.credentials_sent)

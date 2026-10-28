@@ -4,11 +4,12 @@ consent, attribution and AEM evidence."""
 from __future__ import annotations
 
 import json
+from urllib.parse import urlsplit
 
 import pandas as pd
 import streamlit as st
 
-from .. import aem_mock, database, mock_scan
+from .. import aem_mock, database, mock_scan, site_credentials
 from ..config import settings
 from ..detection import EXPECTED_BEFORE_CONSENT, aem_code_folders, consent_violations
 from ..investigation import analyze_target, run_investigation
@@ -51,12 +52,20 @@ def _run_form(mappings: list[dict], mock: bool) -> None:
     if url and not (match(url, mappings) or known_domain):
         st.warning("No website mapping for this domain. Add one under Settings.")
 
+    login = None
+    if url and known_domain and not mock:
+        login, source = site_credentials.resolve(
+            urlsplit(url).hostname or "", st.session_state["session_site_credentials"])
+        if login:
+            st.caption(f"Signing in to the site as {login['username']} (Basic authentication, {source}).")
+
     if st.button("Run investigation", type="primary", disabled=not (url and known_domain)):
         with st.spinner("Scanning the page" + (" (a browser window will open)" if show_browser else "") + "..."):
             result = run_investigation(
                 url, *_configuration(mock), mock=mock, device=device, consent=consent,
                 show_browser=show_browser, timeout=settings.scan_timeout,
                 settle=settings.settle_seconds, session_tokens=st.session_state["session_aem_tokens"],
+                site_login=login,
             )
         result["consent_mode"] = consent
         if result.get("browser"):
