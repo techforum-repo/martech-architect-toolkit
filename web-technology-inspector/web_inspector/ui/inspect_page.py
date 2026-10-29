@@ -12,6 +12,7 @@ import streamlit as st
 from .. import aem_browser, aem_lookup, aem_mock, database, mock_scan, preferences, site_credentials
 from ..aem_screens import AemLoginRequired, DialogNotOpened, editor_url
 from ..errors import friendly_error
+from ..logging_setup import LOG_PATH
 from ..config import settings
 from ..detection import EXPECTED_BEFORE_CONSENT, aem_code_folders, consent_violations
 from ..investigation import analyze_target, environment_auth, lookup_aem_page, needs_sign_in, run_investigation
@@ -409,6 +410,9 @@ def auto_capture(result: dict, analysis: dict, target: str, key: tuple) -> None:
 
 
 def _show_captures(captures: dict, target: str) -> None:
+    if any(item.get("error") or (item.get("result") and not item["result"]["fields"])
+           for item in captures["items"]):
+        st.caption(f"Each attempt is logged (addresses and steps, no values) in `{LOG_PATH}`.")
     for index, item in enumerate(captures["items"]):
         st.markdown(f"**{item['item']['title']}**")
         if item.get("error"):

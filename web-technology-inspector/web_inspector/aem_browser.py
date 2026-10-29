@@ -34,6 +34,8 @@ from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
 from .aem_screens import (
     READ_METHODS,
+    AemLoginRequired,
+    DialogNotOpened,
     SignInIncomplete,
     _capture_in_editor,
     _capture_in_page,
@@ -42,7 +44,10 @@ from .aem_screens import (
     properties_url,
 )
 from . import chrome_process
+from .logging_setup import get_logger
 from .utils import harden_file_permissions
+
+log = get_logger()
 
 SIGNED_IN_NOTICE = """<!doctype html><title>AEM - signed in</title>
 <body style="font: 16px system-ui, sans-serif; margin: 3rem; max-width: 40rem; color: #222">
@@ -168,6 +173,7 @@ class AemWindow:
         self._profile_dir.mkdir(parents=True, exist_ok=True)
         harden_file_permissions(self._profile_dir, mode=0o700)
         port = chrome_process.running_port(self._profile_dir)
+        log.info("AEM window: %s", f"reconnecting to its Chrome on port {port}" if port else "starting its Chrome")
         if not port:
             installed = self._use_chrome and chrome_process.installed_chrome()
             port = chrome_process.launch(installed or playwright.chromium.executable_path,
@@ -283,6 +289,8 @@ class AemWindow:
                         self._guard(context)
                     self.storage_state = context.storage_state()
                     self._show_notice(page)
+                    log.info("AEM window signed in to %s (saving %s)", self.author_base,
+                             "blocked" if self._block_saving else "not blocked")
                     self._ready.set()
                     self._serve(page)
                 finally:
@@ -292,6 +300,10 @@ class AemWindow:
                         _close_chrome(browser)
                     # else: leave the detached Chrome open; the app only disconnects
         except BaseException as exc:  # noqa: BLE001 - handed to the waiting caller
+            if not isinstance(exc, (WindowClosed, SignInIncomplete)):
+                log.exception("AEM window stopped")
+            else:
+                log.info("AEM window ended: %s", exc)
             self._error = exc
             self._ready.set()
         finally:
@@ -320,18 +332,38 @@ class AemWindow:
                     raise WindowClosed("The AEM window was closed")
                 urls, term, timeout, component = args
                 before, sent_before, failed_before = len(self.blocked), len(self.sent), len(self.failures)
+                log.info("AEM screenshot: %s, term %r", f"component {component}" if component else urls[0], term)
                 if component:
                     result = _capture_in_editor(page, self.author_base, component, term, self.blocked, timeout)
                 else:
                     result = _capture_in_page(page, self.author_base, urls, term, self.blocked, timeout)
+                _log_result(result, self.failures[failed_before:])
                 result["blocked_writes"] = self.blocked[before:]
                 result["sent_writes"] = self.sent[sent_before:]
                 result["failed_responses"] = self.failures[failed_before:]
                 box["result"] = result
             except BaseException as exc:  # noqa: BLE001 - handed to the waiting caller
+                log.error("AEM screenshot failed: %s: %s%s", type(exc).__name__, exc,
+                          f" | step: {exc.step} | editor: {exc.state}" if isinstance(exc, DialogNotOpened) else "",
+                          exc_info=not isinstance(exc, (DialogNotOpened, AemLoginRequired)))
+                failed = self.failures[failed_before:]
+                if failed:
+                    log.error("AEM requests that failed meanwhile: %s", failed[:20])
                 box["error"] = exc
             finally:
                 done.set()
+
+
+def _log_result(result: dict, failed: list[str]) -> None:
+    """One line per screenshot outcome: addresses, statuses, tabs; no values."""
+    attempts = ", ".join(f"{a['url'].split('?')[0]} -> {a['status']}" for a in result.get("attempts", []))
+    if result["fields"]:
+        log.info("AEM screenshot taken: %s | fields: %s", attempts,
+                 [(f["label"] or f["name"], " > ".join(f["tabs"]), f["kind"], f["visible"]) for f in result["fields"]])
+    else:
+        log.warning("AEM screenshot found no match: %s | dialog: %s", attempts, result.get("no_match"))
+    if failed:
+        log.warning("AEM requests that failed meanwhile: %s", failed[:20])
 
 
 # --- registry: one window per AEM environment, shared across reruns ---------------
