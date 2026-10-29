@@ -48,8 +48,9 @@ On the **Settings** page:
 3. Click **Sign in to AEM** for the environment. An AEM window opens; sign
    in as usual (Adobe SSO) and **keep that window open**: AEM's UI only trusts
    the browser you signed in with, so screenshots are taken in it. Once you're
-   signed in, the window is read-only (write requests are blocked, also for
-   anything done in it by hand). The sign-in is also used for every AEM
+   signed in, the window is read-only for AEM (write requests to the author
+   are blocked, also for anything done in it by hand; Adobe's sign-in
+   service is allowed, as AEM's UI uses it to keep the login fresh). The sign-in is also used for every AEM
    lookup and is kept in memory for the session only; closing the window or
    restarting the app means signing in again. A Local Development Token can
    be used instead (optional, under the environment) for lookups and for
@@ -146,8 +147,11 @@ is kept in memory for the session only, never on disk, because it works like
 a password for your AEM account.
 
 The author UI runs its own scripts, so the screenshot browser is locked down:
-every request that isn't a read is blocked, the token (when used) is attached
-only to requests to your author, and nothing is clicked except dialog tabs.
+every request to your author that isn't a read is blocked, the token (when
+used) is attached only to requests to your author, and nothing is clicked
+except dialog tabs. Requests to other sites, such as Adobe's sign-in service
+refreshing the login, are not blocked: they can't change anything in AEM, and
+blocking them makes AEM's UI ask for a sign-in.
 
 `scripts/aem_screenshot_spike.py` does the same from the command line and
 saves the images under `data/screenshots/`.

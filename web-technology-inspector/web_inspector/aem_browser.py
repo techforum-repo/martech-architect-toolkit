@@ -8,9 +8,9 @@ Playwright objects belong to the thread that created them, and Streamlit runs
 each rerun on a new thread, so one worker thread per window owns Playwright
 and runs commands sent to it through a queue.
 
-Read-only: once signed in, every request from the window that isn't a read is
-blocked, including anything done by hand in it. Closing the window ends the
-session.
+Read-only: once signed in, every request from the window to author that isn't
+a read is blocked, including anything done by hand in it (see
+aem_screens.blocks_write). Closing the window ends the session.
 """
 
 from __future__ import annotations
@@ -21,9 +21,9 @@ import threading
 from playwright.sync_api import sync_playwright
 
 from .aem_screens import (
-    READ_METHODS,
     SignInIncomplete,
     _capture_in_page,
+    blocks_write,
     _signed_in,
     component_dialog_urls,
     properties_url,
@@ -92,7 +92,7 @@ class AemWindow:
 
     def _guard(self, context) -> None:
         def handle(route):
-            if route.request.method.upper() not in READ_METHODS:
+            if blocks_write(route.request.method, route.request.url, self.author_base):
                 self.blocked.append(f"{route.request.method} {route.request.url}")
                 route.abort()
             else:
@@ -148,7 +148,7 @@ class AemWindow:
                     raise WindowClosed("The AEM window was closed")
                 urls, term, timeout = args
                 before = len(self.blocked)
-                result = _capture_in_page(page, self.author_base, urls, term, [], timeout)
+                result = _capture_in_page(page, self.author_base, urls, term, self.blocked, timeout)
                 result["blocked_writes"] = self.blocked[before:]
                 box["result"] = result
             except BaseException as exc:  # noqa: BLE001 - handed to the waiting caller

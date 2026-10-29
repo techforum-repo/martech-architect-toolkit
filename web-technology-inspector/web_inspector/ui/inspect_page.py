@@ -338,10 +338,13 @@ def _capture(result: dict, target_item: dict, term: str) -> dict:
                 f"Landed on {exc.landed}" + (f" (“{exc.title}”)" if exc.title else ""),
                 "Send this message to the developer to adjust the screenshot address.",
             ]}}
-        st.session_state["aem_ui_sessions"].pop(environment["id"], None)  # the sign-in has ended
-        aem_browser.close_window(environment["id"])
-        return {"item": target_item, "sign_in": True, "landed": exc.landed, "title": exc.title,
-                "reason": "AEM showed a sign-in page instead of the dialog: the sign-in has ended."}
+        if window:
+            # Leave the window open: the sign-in page is in it, and can be finished there.
+            return {"item": target_item, "sign_in": True, "in_window": True, "landed": exc.landed,
+                    "blocked": exc.blocked,
+                    "reason": "AEM showed a sign-in page in the AEM window instead of the dialog."}
+        return {"item": target_item, "sign_in": True, "landed": exc.landed, "blocked": exc.blocked,
+                "reason": "AEM showed a sign-in page instead of the dialog."}
     except Exception as exc:  # noqa: BLE001 - shown to the user as a friendly error
         error = friendly_error(exc)
         return {"item": target_item, "error": {"title": error.title, "reasons": error.reasons}}
@@ -413,8 +416,19 @@ def _properties_screenshot(result: dict, analysis: dict, target: str, key: tuple
     if current and any(item.get("sign_in") for item in current["items"]):
         item = next(item for item in current["items"] if item.get("sign_in"))
         landed = f" It opened {item['landed']}." if item.get("landed") else ""
-        st.warning(f"{item.get('reason', 'AEM needs a sign-in for screenshots.')}{landed} Use **Sign in to AEM** "
-                   "at the top of the page and keep the AEM window open; the screenshots are taken right after.")
+        if item.get("in_window"):
+            st.warning(f"{item['reason']}{landed} If it asks you to sign in, finish that in the AEM window "
+                       "(don't close it), then click **Search AEM** again.")
+        else:
+            st.warning(f"{item.get('reason', 'AEM needs a sign-in for screenshots.')}{landed} Use **Sign in to "
+                       "AEM** at the top of the page and keep the AEM window open; the screenshots are taken "
+                       "right after.")
+        if item.get("blocked"):
+            with st.expander(f"{len(item['blocked'])} write request(s) to AEM were blocked meanwhile"):
+                st.code("\n".join(item["blocked"][:20]), language=None)
+        if st.button("Retry screenshots", key="retry_screenshots"):
+            _capture_pages(result, current["targets"], target, key)
+            st.rerun()
         return
 
     if current:

@@ -7,7 +7,7 @@ usual, and the resulting browser session is reused for screenshots. That
 session works like a password, so callers keep it in memory only.
 
 Read-only by construction, because author UI pages run their own scripts:
-- every request that isn't GET, HEAD or OPTIONS is aborted, on any host;
+- every request to author that isn't GET, HEAD or OPTIONS is aborted;
 - the AEM token is added only to requests to the author origin, never to
   the CDNs and other hosts the UI loads;
 - nothing is clicked except dialog tabs, and nothing is typed.
@@ -101,11 +101,13 @@ class AemLoginRequired(RuntimeError):
     author sent the browser somewhere else (e.g. the Experience Cloud shell).
     """
 
-    def __init__(self, message: str, *, landed: str = "", title: str = "", sign_in_page: bool = True):
+    def __init__(self, message: str, *, landed: str = "", title: str = "", sign_in_page: bool = True,
+                 blocked: list[str] | None = None):
         super().__init__(message)
         self.landed = landed
         self.title = title
         self.sign_in_page = sign_in_page
+        self.blocked = blocked or []
 
 
 def _is_sign_in_page(url: str) -> bool:
@@ -172,18 +174,30 @@ def properties_url(author_base: str, page_path: str) -> str:
     return author_base.rstrip("/") + PROPERTIES_PATH + "?item=" + quote(page_path, safe="/:")
 
 
+def _origin(url: str) -> str:
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}".lower()
+
+
+def blocks_write(method: str, url: str, author_base: str) -> bool:
+    """The read-only rule: no request that could change content reaches author.
+
+    Only the author origin is guarded. AEM's UI also POSTs to Adobe's sign-in
+    service to keep its login fresh; blocking that made AEM send the browser to
+    Adobe sign-in, and it can't change anything in AEM."""
+    return method.upper() not in READ_METHODS and _origin(url) == _origin(author_base)
+
+
 def _guard(context, author_base: str, token: str | None, blocked: list[str]) -> None:
-    author = urlsplit(author_base)
-    origin = f"{author.scheme}://{author.netloc}".lower()
+    origin = _origin(author_base)
 
     def handle(route):
         request = route.request
-        if request.method.upper() not in READ_METHODS:
+        if blocks_write(request.method, request.url, author_base):
             blocked.append(f"{request.method} {request.url}")
             route.abort()
             return
-        url = urlsplit(request.url)
-        if token and f"{url.scheme}://{url.netloc}".lower() == origin:
+        if token and _origin(request.url) == origin:
             route.fallback(headers={**request.headers, "authorization": "Bearer " + token})
         else:
             route.fallback()
@@ -240,7 +254,8 @@ def _capture_in_page(page, author_base: str, urls: list[str], term: str, blocked
         where = page.url.split("?")[0]
         raise AemLoginRequired(
             f"The dialog opened {'a sign-in page' if sign_in_page else 'a different page'} "
-            f"instead: {where}", landed=where, title=page.title(), sign_in_page=sign_in_page)
+            f"instead: {where}", landed=where, title=page.title(), sign_in_page=sign_in_page,
+            blocked=list(blocked))
 
     fields = page.evaluate(FIND_FIELDS_SCRIPT, term)
     captured = []

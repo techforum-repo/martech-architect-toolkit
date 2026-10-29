@@ -10,10 +10,15 @@ from tests.test_scanner import browser_available
 AUTHOR = "https://author-p9-e9.adobeaemcloud.com"
 SIGN_IN = "https://auth.services.adobe.com/en_US/index.html"
 
+IMS_TOKEN = "https://ims-na1.adobelogin.com/ims/check/v6/token"
+
 DIALOG = """<!doctype html><html><body>
 <script>
-  // Like AEM's UI: the Adobe sign-in lives in this tab's storage; without it, go to Adobe sign-in.
+  // Like AEM's UI: the Adobe sign-in lives in this tab's storage, and is refreshed
+  // with a POST to Adobe's login service; if either fails, go to Adobe sign-in.
   if (!sessionStorage.getItem('adobe-ims')) location.href = '""" + SIGN_IN + """';
+  fetch('""" + IMS_TOKEN + """', {method: 'POST'}).then(r => r.ok || Promise.reject())
+    .catch(() => { location.href = '""" + SIGN_IN + """'; });
   fetch('/libs/granite/csrf/token.json', {method: 'POST'}).catch(() => {});
 </script>
 <div class="coral-Form-fieldwrapper"><label>Analytics domain</label>
@@ -30,6 +35,8 @@ def strict_author(seen):
                               body="<script>sessionStorage.setItem('adobe-ims', 'signed-in')</script>Start")
             elif request.url.startswith(AUTHOR + "/mnt/"):
                 route.fulfill(status=200, content_type="text/html", body=DIALOG)
+            elif request.url.startswith(IMS_TOKEN):
+                route.fulfill(status=200, content_type="application/json", body='{"valid": true}')
             elif request.url.startswith(SIGN_IN):
                 route.fulfill(status=200, content_type="text/html", body="<title>Sign in</title>")
             else:
@@ -62,8 +69,14 @@ class AemWindowTests(unittest.TestCase):
     def test_window_is_read_only_after_sign_in(self):
         result = aem_browser.capture_page_properties(self.window, "/content/site/en", "tracking.example.com")
         self.assertEqual(len(result["blocked_writes"]), 1)
-        self.assertIn("POST", result["blocked_writes"][0])
-        self.assertNotIn("POST", {method for method, _ in self.seen})  # never reached the author
+        self.assertIn("POST " + AUTHOR, result["blocked_writes"][0])
+        author_posts = [url for method, url in self.seen if method == "POST" and url.startswith(AUTHOR)]
+        self.assertEqual(author_posts, [])  # never reached the author
+
+    def test_adobe_sign_in_refresh_is_allowed(self):
+        # Blocking this POST is what sent the real author's UI to Adobe sign-in.
+        aem_browser.capture_page_properties(self.window, "/content/site/en", "tracking.example.com")
+        self.assertIn(("POST", IMS_TOKEN), self.seen)
 
     def test_several_captures_and_reruns_share_the_window(self):
         self.assertIs(aem_browser.get_window("env_test"), self.window)
@@ -77,6 +90,17 @@ class AemWindowTests(unittest.TestCase):
         self.assertIsNone(aem_browser.get_window("env_test"))
         with self.assertRaises(aem_browser.WindowClosed):
             self.window.capture([AUTHOR + "/mnt/x"], "x", timeout=5)
+
+
+class WriteRuleTests(unittest.TestCase):
+    def test_only_writes_to_author_are_blocked(self):
+        from web_inspector.aem_screens import blocks_write
+        self.assertTrue(blocks_write("POST", AUTHOR + "/libs/granite/csrf/token.json", AUTHOR))
+        self.assertTrue(blocks_write("delete", AUTHOR + "/content/site/en", AUTHOR))
+        self.assertFalse(blocks_write("GET", AUTHOR + "/content/site/en.html", AUTHOR))
+        self.assertFalse(blocks_write("POST", IMS_TOKEN, AUTHOR))
+        # A look-alike host is another site, not the author (and can't change author content).
+        self.assertFalse(blocks_write("POST", "https://author-p9-e9.adobeaemcloud.com.evil.net/x", AUTHOR))
 
 
 if __name__ == "__main__":
