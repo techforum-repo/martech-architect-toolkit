@@ -221,3 +221,44 @@ class AemWindowOptionTests(unittest.TestCase):
 
         aem_browser.forget_sign_in("env_saved", profile)
         self.assertFalse(profile.exists())
+
+
+class NoticeTests(unittest.TestCase):
+    def test_navigation_during_the_notice_does_not_fail_the_sign_in(self):
+        from playwright.sync_api import Error as PlaywrightError
+
+        class Page:  # as on the real author: AEM navigates again just after sign-in
+            calls = 0
+
+            def goto(self, *args, **kwargs):
+                pass
+
+            def set_content(self, *args, **kwargs):
+                Page.calls += 1
+                if Page.calls == 1:
+                    raise PlaywrightError("Page.set_content: Execution context was destroyed, "
+                                          "most likely because of a navigation")
+
+            def is_closed(self):
+                return False
+
+            def wait_for_timeout(self, ms):
+                pass
+
+        aem_browser.AemWindow(AUTHOR)._show_notice(Page())  # doesn't raise
+        self.assertEqual(Page.calls, 2)  # and tried again
+
+    def test_notice_gives_up_quietly(self):
+        from playwright.sync_api import Error as PlaywrightError
+
+        class Page:
+            def goto(self, *args, **kwargs):
+                raise PlaywrightError("navigation interrupted")
+
+            def is_closed(self):
+                return False
+
+            def wait_for_timeout(self, ms):
+                pass
+
+        aem_browser.AemWindow(AUTHOR)._show_notice(Page())  # doesn't raise

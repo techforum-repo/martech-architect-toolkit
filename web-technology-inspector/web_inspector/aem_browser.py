@@ -157,6 +157,23 @@ class AemWindow:
                 if channel is None:
                     raise  # Chrome isn't installed: Chromium was the fallback
 
+    def _show_notice(self, page) -> None:
+        """The start page isn't needed: say what the window is for instead.
+
+        Same tab, so the sign-in stays. AEM may still be navigating (a
+        redirect after sign-in), which interrupts this; the notice is only a
+        nicety, so that never fails the sign-in."""
+        notice = SIGNED_IN_NOTICE if self._block_saving else SIGNED_IN_NOTICE_OPEN
+        for _ in range(3):
+            try:
+                page.goto("about:blank", wait_until="load", timeout=10_000)  # stops AEM's navigation
+                page.set_content(notice, timeout=10_000)
+                return
+            except PlaywrightError:
+                if page.is_closed():
+                    return
+                page.wait_for_timeout(1000)
+
     def _run(self) -> None:
         try:
             with sync_playwright() as playwright:
@@ -183,9 +200,7 @@ class AemWindow:
                         # Signing in is done: from now on the window can't save.
                         self._guard(context)
                     self.storage_state = context.storage_state()
-                    # The start page isn't needed: say what the window is for
-                    # instead. Same tab, so the sign-in stays.
-                    page.set_content(SIGNED_IN_NOTICE if self._block_saving else SIGNED_IN_NOTICE_OPEN)
+                    self._show_notice(page)
                     self._ready.set()
                     self._serve(page)
                 finally:
