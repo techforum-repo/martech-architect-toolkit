@@ -418,15 +418,23 @@ def _show_captures(captures: dict, target: str) -> None:
             st.download_button("Download screenshot", field["image"],
                                f"aem-{item['item']['path'].rsplit('/', 1)[-1]}-{number}.png", "image/png",
                                key=f"aem_screenshot_{index}_{number}")
-        if shot["blocked_writes"]:
-            st.caption(f"{len(shot['blocked_writes'])} write request(s) from the author UI were blocked.")
+        if shot["blocked_writes"] or shot.get("sent_writes"):
+            with st.expander(f"Requests from AEM's UI: {len(shot['blocked_writes'])} blocked as saves, "
+                             f"{len(shot.get('sent_writes') or [])} other POST(s) allowed"):
+                if shot["blocked_writes"]:
+                    st.markdown("**Blocked** (would change content)")
+                    st.code("\n".join(shot["blocked_writes"][:30]), language=None)
+                if shot.get("sent_writes"):
+                    st.markdown("**Allowed** (AEM's UI loading)")
+                    st.code("\n".join(shot["sent_writes"][:30]), language=None)
 
 
 def _properties_screenshot(result: dict, analysis: dict, target: str, key: tuple) -> None:
     st.markdown("#### AEM screenshots")
     st.caption("For each match: Page Properties when the target is a page property, or that component's "
                "edit dialog when it's in a component, on the right tab with the field highlighted. "
-               "Read-only: the browser blocks every write request and clicks only dialog tabs.")
+               "Nothing is saved: the browser blocks every request that would change content "
+               "(saving, publishing, deleting, workflows) and clicks only dialog tabs.")
     if not target.strip():
         st.info("Choose or type a target above.")
         return
@@ -446,7 +454,7 @@ def _properties_screenshot(result: dict, analysis: dict, target: str, key: tuple
                        "AEM** at the top of the page and keep the AEM window open; the screenshots are taken "
                        "right after.")
         if item.get("blocked"):
-            with st.expander(f"{len(item['blocked'])} write request(s) to AEM were blocked meanwhile"):
+            with st.expander(f"{len(item['blocked'])} request(s) that would change AEM were blocked meanwhile"):
                 st.code("\n".join(item["blocked"][:20]), language=None)
         if st.button("Retry screenshots", key="retry_screenshots"):
             _capture_pages(result, current["targets"], target, key)

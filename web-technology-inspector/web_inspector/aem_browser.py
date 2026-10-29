@@ -8,8 +8,8 @@ Playwright objects belong to the thread that created them, and Streamlit runs
 each rerun on a new thread, so one worker thread per window owns Playwright
 and runs commands sent to it through a queue.
 
-Read-only: once signed in, every request from the window to author that isn't
-a read is blocked, including anything done by hand in it (see
+No saving: once signed in, every request from the window that would change
+content in author is blocked, including anything done by hand in it (see
 aem_screens.blocks_write). Closing the window ends the session.
 """
 
@@ -21,6 +21,7 @@ import threading
 from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
 from .aem_screens import (
+    READ_METHODS,
     SignInIncomplete,
     _capture_in_page,
     blocks_write,
@@ -34,8 +35,8 @@ SIGNED_IN_NOTICE = """<!doctype html><title>AEM - signed in</title>
 <h2>Signed in to AEM</h2>
 <p>Web Technology Inspector takes its AEM screenshots in this window. Keep it open;
 closing it signs out.</p>
-<p>The window is read-only: AEM can't save anything from it, so AEM pages opened
-here by hand may show errors where they would save.</p></body>"""
+<p>Nothing can be saved to AEM from this window: saving, publishing, deleting
+and workflows are blocked, so AEM shows an error if you try.</p></body>"""
 
 _windows: dict[str, "AemWindow"] = {}
 _lock = threading.Lock()
@@ -56,6 +57,7 @@ class AemWindow:
         self._error: BaseException | None = None
         self.storage_state: dict | None = None
         self.blocked: list[str] = []
+        self.sent: list[str] = []  # POSTs to author let through: not saves
         self._thread = threading.Thread(target=self._run, name="aem-window", daemon=True)
 
     # --- called from Streamlit threads ---------------------------------------
@@ -104,6 +106,9 @@ class AemWindow:
                 self.blocked.append(f"{route.request.method} {route.request.url}")
                 route.abort()
             else:
+                if route.request.method.upper() not in READ_METHODS and \
+                        route.request.url.lower().startswith(self.author_base.lower().rstrip("/") + "/"):
+                    self.sent.append(f"{route.request.method} {route.request.url.split('?')[0]}")
                 route.fallback()
         context.route("**/*", handle)
 
@@ -127,12 +132,11 @@ class AemWindow:
                     else:
                         raise SignInIncomplete(f"Not signed in within {self._sign_in_timeout // 60} minutes")
 
-                    # Signing in is done: from now on the window may only read.
+                    # Signing in is done: from now on the window can't save.
                     self._guard(context)
                     self.storage_state = context.storage_state()
-                    # AEM's start page saves things as it loads, which the guard
-                    # refuses, so it shows an error. It isn't needed: say what
-                    # the window is for instead. Same tab, so the sign-in stays.
+                    # The start page isn't needed: say what the window is for
+                    # instead. Same tab, so the sign-in stays.
                     page.set_content(SIGNED_IN_NOTICE)
                     self._ready.set()
                     self._serve(page)
@@ -166,9 +170,10 @@ class AemWindow:
                 if page.is_closed():
                     raise WindowClosed("The AEM window was closed")
                 urls, term, timeout = args
-                before = len(self.blocked)
+                before, sent_before = len(self.blocked), len(self.sent)
                 result = _capture_in_page(page, self.author_base, urls, term, self.blocked, timeout)
                 result["blocked_writes"] = self.blocked[before:]
+                result["sent_writes"] = self.sent[sent_before:]
                 box["result"] = result
             except BaseException as exc:  # noqa: BLE001 - handed to the waiting caller
                 box["error"] = exc

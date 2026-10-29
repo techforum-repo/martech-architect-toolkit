@@ -22,6 +22,8 @@ DIALOG = """<!doctype html><html><body>
   fetch('""" + IMS_TOKEN + """', {method: 'POST'}).then(r => r.ok || Promise.reject())
     .catch(() => { location.href = '""" + SIGN_IN + """'; });
   fetch('/libs/granite/csrf/token.json', {method: 'POST'}).catch(() => {});
+  // AEM's UI also POSTs while loading; that must still reach the author.
+  fetch('/mnt/overlay/granite/ui/content/load.json', {method: 'POST'});
 </script>
 <div class="coral-Form-fieldwrapper"><label>Analytics domain</label>
 <input name="./analyticsDomain" value="tracking.example.com"></div></body></html>"""
@@ -73,7 +75,8 @@ class AemWindowTests(unittest.TestCase):
         self.assertEqual(len(result["blocked_writes"]), 1)
         self.assertIn("POST " + AUTHOR, result["blocked_writes"][0])
         author_posts = [url for method, url in self.seen if method == "POST" and url.startswith(AUTHOR)]
-        self.assertEqual(author_posts, [])  # never reached the author
+        self.assertEqual(author_posts, [AUTHOR + "/mnt/overlay/granite/ui/content/load.json"])
+        self.assertEqual(result["sent_writes"], ["POST " + author_posts[0]])
 
     def test_adobe_sign_in_refresh_is_allowed(self):
         # Blocking this POST is what sent the real author's UI to Adobe sign-in.
@@ -95,11 +98,30 @@ class AemWindowTests(unittest.TestCase):
 
 
 class WriteRuleTests(unittest.TestCase):
-    def test_only_writes_to_author_are_blocked(self):
+    def test_saves_to_author_are_blocked(self):
         from web_inspector.aem_screens import blocks_write
-        self.assertTrue(blocks_write("POST", AUTHOR + "/libs/granite/csrf/token.json", AUTHOR))
-        self.assertTrue(blocks_write("delete", AUTHOR + "/content/site/en", AUTHOR))
+        saves = [
+            ("POST", "/content/site/en/jcr:content"),           # Page Properties save
+            ("POST", "/content/site/en/_jcr_content/root/text"),  # component dialog save
+            ("POST", "/conf/site/settings/cloudconfigs"),
+            ("POST", "/content.html"),
+            ("POST", "/%63ontent/site/en"),                     # encoded
+            ("POST", "/mnt/../content/site/en"),                # dot segments
+            ("POST", "/bin/replicate.json"),
+            ("POST", "/bin/wcmcommand"),
+            ("POST", "/adobe/sites/pages"),
+            ("delete", "/content/site/en"),
+            ("PUT", "/mnt/overlay/x"),
+        ]
+        for method, path in saves:
+            self.assertTrue(blocks_write(method, AUTHOR + path, AUTHOR), (method, path))
+
+    def test_other_requests_are_allowed(self):
+        from web_inspector.aem_screens import blocks_write
         self.assertFalse(blocks_write("GET", AUTHOR + "/content/site/en.html", AUTHOR))
+        self.assertFalse(blocks_write("POST", AUTHOR + "/mnt/overlay/granite/ui/content/load.json", AUTHOR))
+        self.assertFalse(blocks_write("POST", AUTHOR + "/content/cq:graphql/global/endpoint.json", AUTHOR))
+        self.assertFalse(blocks_write("POST", AUTHOR + "/contentfinder", AUTHOR))
         self.assertFalse(blocks_write("POST", IMS_TOKEN, AUTHOR))
         # A look-alike host is another site, not the author (and can't change author content).
         self.assertFalse(blocks_write("POST", "https://author-p9-e9.adobeaemcloud.com.evil.net/x", AUTHOR))

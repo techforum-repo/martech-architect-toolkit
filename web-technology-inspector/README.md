@@ -48,9 +48,12 @@ On the **Settings** page:
 3. Click **Sign in to AEM** for the environment. An AEM window opens; sign
    in as usual (Adobe SSO) and **keep that window open**: AEM's UI only trusts
    the browser you signed in with, so screenshots are taken in it. Once you're
-   signed in, the window is read-only for AEM (write requests to the author
-   are blocked, also for anything done in it by hand; Adobe's sign-in
-   service is allowed, as AEM's UI uses it to keep the login fresh). The sign-in is also used for every AEM
+   signed in, nothing can be saved to AEM from the window: requests that
+   would change content (POSTs to repository paths such as `/content` or
+   `/conf`, `/bin/` servlets like publish, and any PUT or DELETE) are
+   blocked, also for anything done in it by hand. Other requests AEM's UI
+   makes while loading are allowed, and each screenshot lists what was
+   blocked and allowed (rule: `blocks_write` in `web_inspector/aem_screens.py`). The sign-in is also used for every AEM
    lookup and is kept in memory for the session only; closing the window or
    restarting the app means signing in again. A Local Development Token can
    be used instead (optional, under the environment) for lookups and for

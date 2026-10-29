@@ -16,7 +16,8 @@ The highlight is a style change in this browser only.
 
 from __future__ import annotations
 
-from urllib.parse import quote, urlsplit
+import posixpath
+from urllib.parse import quote, unquote, urlsplit
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
@@ -180,13 +181,41 @@ def _origin(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}".lower()
 
 
+# Where a POST changes the repository: the Sling POST servlet saves to any
+# node under these roots (how dialogs and Page Properties save), and these
+# servlets publish, move, delete, run workflows or roll out.
+SAVE_ROOTS = ("/content", "/conf", "/apps", "/libs", "/etc", "/var", "/home", "/oak:index", "/jcr:system")
+SAVE_SERVLETS = ("/bin/", "/adobe/", "/api/")
+# Read-only POSTs under those roots: AEM's GraphQL has queries only.
+READ_POSTS = ("/content/cq:graphql/", "/content/_cq_graphql/")
+
+
+def _path(url: str) -> str:
+    # Decoded and normalised, so /%63ontent or /x/../content still count.
+    # normpath keeps a leading "//", which Sling treats as "/".
+    return "/" + posixpath.normpath("/" + unquote(urlsplit(url).path)).lower().lstrip("/")
+
+
 def blocks_write(method: str, url: str, author_base: str) -> bool:
-    """The read-only rule: no request that could change content reaches author.
+    """The no-save rule: no request that changes content reaches author.
 
     Only the author origin is guarded. AEM's UI also POSTs to Adobe's sign-in
     service to keep its login fresh; blocking that made AEM send the browser to
-    Adobe sign-in, and it can't change anything in AEM."""
-    return method.upper() not in READ_METHODS and _origin(url) == _origin(author_base)
+    Adobe sign-in, and it can't change anything in AEM.
+
+    Not every POST is a save: AEM's UI makes some while it loads, and blocking
+    them all stopped the start page and dialogs loading. So PUT, PATCH and
+    DELETE are always blocked, and POST wherever it saves (see SAVE_ROOTS)."""
+    method = method.upper()
+    if method in READ_METHODS or _origin(url) != _origin(author_base):
+        return False
+    if method != "POST":
+        return True
+    path = _path(url)
+    if any(path.startswith(root) for root in READ_POSTS) and path.endswith(".json"):
+        return False
+    return any(path == root or path.startswith(root + "/") or path.startswith(root + ".")
+               for root in SAVE_ROOTS) or any(path.startswith(s) for s in SAVE_SERVLETS)
 
 
 def _guard(context, author_base: str, token: str | None, blocked: list[str]) -> None:
