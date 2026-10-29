@@ -25,6 +25,7 @@ import queue
 import shutil
 import threading
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
@@ -79,6 +80,7 @@ class AemWindow:
         self.storage_state: dict | None = None
         self.blocked: list[str] = []
         self.sent: list[str] = []  # POSTs to author let through: not saves
+        self.failures: list[str] = []  # AEM and Adobe answers that failed, address and status only
         self._thread = threading.Thread(target=self._run, name="aem-window", daemon=True)
 
     # --- called from Streamlit threads ---------------------------------------
@@ -140,7 +142,10 @@ class AemWindow:
     def _open(self, playwright):
         """(browser or None, context): the installed Chrome if wanted and there,
         else Playwright's Chromium; with the saved profile if remembering."""
-        options = {"headless": not self._show_browser}
+        # Without Playwright's "automated browser" switches, so the window is
+        # a plain Chrome to AEM and Adobe, like the user's own browser.
+        options = {"headless": not self._show_browser, "ignore_default_args": ["--enable-automation"],
+                   "args": ["--disable-blink-features=AutomationControlled"]}
         channels = ["chrome", None] if self._use_chrome else [None]
         for channel in channels:
             launch = dict(options, **({"channel": channel} if channel else {}))
@@ -156,6 +161,27 @@ class AemWindow:
             except PlaywrightError:
                 if channel is None:
                     raise  # Chrome isn't installed: Chromium was the fallback
+
+    def _watch_failures(self, context) -> None:
+        """Note failing answers from author and Adobe (no bodies or headers):
+        they say why AEM's UI shows an error page."""
+        author = self.author_base.lower().rstrip("/")
+
+        def relevant(url: str) -> bool:
+            host = (urlsplit(url).hostname or "").lower()
+            return url.lower().startswith(author + "/") or host.endswith((".adobe.com", ".adobelogin.com"))
+
+        def response(response):
+            if response.status >= 400 and relevant(response.url):
+                self.failures.append(f"{response.status} {response.request.method} {response.url.split('?')[0]}")
+
+        def failed(request):
+            if relevant(request.url) and request.failure != "net::ERR_ABORTED" \
+                    and f"{request.method} {request.url}" not in self.blocked:  # listed as blocked
+                self.failures.append(f"{request.failure} {request.method} {request.url.split('?')[0]}")
+
+        context.on("response", response)
+        context.on("requestfailed", failed)
 
     def _show_notice(self, page) -> None:
         """The start page isn't needed: say what the window is for instead.
@@ -181,6 +207,7 @@ class AemWindow:
                 try:
                     if self._prepare_context:
                         self._prepare_context(context)
+                    self._watch_failures(context)
                     page = context.pages[0] if context.pages else context.new_page()
                     page.goto(self.author_base.rstrip("/") + "/aem/start.html",
                               wait_until="domcontentloaded", timeout=60_000)
@@ -233,10 +260,11 @@ class AemWindow:
                 if page.is_closed():
                     raise WindowClosed("The AEM window was closed")
                 urls, term, timeout = args
-                before, sent_before = len(self.blocked), len(self.sent)
+                before, sent_before, failed_before = len(self.blocked), len(self.sent), len(self.failures)
                 result = _capture_in_page(page, self.author_base, urls, term, self.blocked, timeout)
                 result["blocked_writes"] = self.blocked[before:]
                 result["sent_writes"] = self.sent[sent_before:]
+                result["failed_responses"] = self.failures[failed_before:]
                 box["result"] = result
             except BaseException as exc:  # noqa: BLE001 - handed to the waiting caller
                 box["error"] = exc

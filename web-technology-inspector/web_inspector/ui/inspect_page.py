@@ -434,6 +434,10 @@ def _show_captures(captures: dict, target: str) -> None:
                        "display). The dialog as opened:")
         if not shot["fields"]:
             st.image(shot["page_image"], width="stretch")
+        if shot.get("failed_responses"):
+            with st.expander(f"{len(shot['failed_responses'])} AEM or Adobe request(s) failed while it loaded"):
+                st.caption("Address and status only. These usually say why AEM shows an error page.")
+                st.code("\n".join(shot["failed_responses"][:40]), language=None)
         for number, field in enumerate(shot["fields"], 1):
             where = " › ".join(field.get("tabs") or [])
             if field.get("visible") is False:

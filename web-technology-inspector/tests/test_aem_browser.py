@@ -262,3 +262,37 @@ class NoticeTests(unittest.TestCase):
                 pass
 
         aem_browser.AemWindow(AUTHOR)._show_notice(Page())  # doesn't raise
+
+
+@unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
+class AemWindowFailureTests(unittest.TestCase):
+    def test_failing_aem_requests_are_listed(self):
+        def prepare(context):
+            strict_author([])(context)
+            context.route(AUTHOR + "/libs/granite/ui/broken.js*",
+                          lambda route: route.fulfill(status=500, body="secret detail"))
+            context.route(AUTHOR + "/mnt/**", lambda route: route.fulfill(
+                status=200, content_type="text/html",
+                body="<script src='/libs/granite/ui/broken.js?x=1'></script>" + DIALOG))
+
+        window = aem_browser.open_window("env_fail", AUTHOR, show_browser=False,
+                                         prepare_context=prepare, timeout=20)
+        self.addCleanup(aem_browser.close_window, "env_fail")
+        result = aem_browser.capture_page_properties(window, "/content/site/en", "tracking.example.com")
+        self.assertIn("500 GET " + AUTHOR + "/libs/granite/ui/broken.js", result["failed_responses"])
+        self.assertNotIn("secret", " ".join(result["failed_responses"]))
+
+    def test_window_does_not_say_it_is_automated(self):
+        page_html = ("<div class='coral-Form-fieldwrapper'><label>Automated</label><input name='./a'></div>"
+                     "<script>document.querySelector('input').value = 'webdriver-' + navigator.webdriver</script>")
+
+        def prepare(context):
+            strict_author([])(context)
+            context.route(AUTHOR + "/mnt/**", lambda route: route.fulfill(
+                status=200, content_type="text/html", body=page_html))
+
+        window = aem_browser.open_window("env_plain", AUTHOR, show_browser=False,
+                                         prepare_context=prepare, timeout=20)
+        self.addCleanup(aem_browser.close_window, "env_plain")
+        result = window.capture([AUTHOR + "/mnt/x"], "webdriver-")
+        self.assertEqual(result["fields"][0]["value"], "webdriver-false")
