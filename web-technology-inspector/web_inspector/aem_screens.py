@@ -25,7 +25,7 @@ PROPERTIES_PATH = "/mnt/overlay/wcm/core/content/sites/properties.html"
 # Finds form fields whose value contains the term, including fields on
 # inactive and nested dialog tabs (custom tabs included), and returns each
 # one with the tab path that leads to it.
-FIND_FIELDS_SCRIPT = """([term, root]) => {
+FIND_FIELDS_SCRIPT = r"""([term, root]) => {
     const lowered = term.toLowerCase();
     // Only inside root (e.g. the open dialog in the page editor), if given.
     const scope = root ? document.querySelector(root) : document.body;
@@ -97,10 +97,13 @@ FIND_FIELDS_SCRIPT = """([term, root]) => {
         .replace(/&nbsp;|&#160;|\u00a0/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
     const core = clean(term).replace(/^[\s\p{P}]+|[\s\p{P}]+$/gu, '');
     const words = core.split(/[^\p{L}\p{N}]+/u).filter(w => w.length > 1);
+    const pathLike = value => !value.includes('<') && !/\s/.test(value.trim())
+        && (value.includes('/') || /^https?:/.test(value.trim()));
     const levels = [
         ['exact', value => value.toLowerCase().includes(lowered)],
         ['cleaned', value => !!core && clean(value).includes(core)],
-        ['words', value => words.length > 1 && words.every(w => clean(value).includes(w))],
+        // Not in a path or link: words of an image's file name aren't the text.
+        ['words', value => words.length > 1 && !pathLike(value) && words.every(w => clean(value).includes(w))],
     ];
     for (const [level, hits] of levels) {
         // 1. Field values, including hidden inputs: code editors and rich text keep

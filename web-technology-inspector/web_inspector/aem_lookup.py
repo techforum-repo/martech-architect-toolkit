@@ -9,6 +9,7 @@ rules apply. The sample environment in aem_mock is answered from sample
 data instead, after the same validation.
 """
 
+import re
 from urllib.parse import quote, urlencode, urlsplit
 
 import requests
@@ -177,6 +178,50 @@ def find_vanity(environment, published_path, auth, root="/content"):
     }
 
 
+# How a full-text hit matched, best first. AEM's full-text search matches
+# words, so "Featured stories" also finds .../featured-stories.jpg in an
+# image's fileReference: "path" hits hold the words only inside a path or URL.
+MATCH_ORDER = ["text", "words", "path", "indirect"]
+
+
+def _clean(text: str) -> str:
+    text = re.sub(r"<[^>]*>", " ", text.lower())
+    text = re.sub(r"&nbsp;|&#160;|\u00a0", " ", text).replace("&amp;", "&")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _path_like(value: str) -> bool:
+    value = value.strip()
+    # A single token with a slash (not HTML): /content/dam/x.jpg, https://..., ../a/b
+    return (bool(value) and "<" not in value and not re.search(r"\s", value)
+            and ("/" in value or value.startswith(("http:", "https:"))))
+
+
+def match_kind(properties: dict, term: str) -> dict:
+    """{"kind", "property"} for the best property of a hit matching term:
+    "text" (the text, ignoring formatting and surrounding punctuation),
+    "words" (all its words), "path" (only inside a path or URL), or
+    "indirect" (no property of the node itself; e.g. matched in a child)."""
+    core = re.sub(r"^[\W_]+|[\W_]+$", "", _clean(term))
+    words = [w for w in re.split(r"[\W_]+", core) if len(w) > 1]
+    best = {"kind": "indirect", "property": ""}
+    for name, value in properties.items():
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            if not isinstance(item, str) or name == "jcr:path":
+                continue
+            cleaned = _clean(item)
+            if (term.lower() in item.lower()) or (core and core in cleaned):
+                kind = "path" if _path_like(item) else "text"
+            elif len(words) > 1 and all(w in cleaned for w in words):
+                kind = "path" if _path_like(item) else "words"
+            else:
+                continue
+            if MATCH_ORDER.index(kind) < MATCH_ORDER.index(best["kind"]):
+                best = {"kind": kind, "property": name}
+    return best
+
+
 def _fulltext(environment, root, term, auth, limit=20, scope=""):
     """One QueryBuilder full-text search under root, as a result entry."""
     status, payload, message = _get_json(
@@ -186,8 +231,8 @@ def _fulltext(environment, root, term, auth, limit=20, scope=""):
             # Quoted, so a domain or URL is searched as one phrase.
             ("fulltext", '"' + term.replace('"', "") + '"'),
             ("p.limit", str(limit)),
-            ("p.hits", "selective"),
-            ("p.properties", "jcr:path sling:resourceType"),
+            # The hit's own properties, to tell which one matched, and how.
+            ("p.hits", "full"),
         ]),
         auth,
     )
@@ -201,10 +246,14 @@ def _fulltext(environment, root, term, auth, limit=20, scope=""):
             "node_path": hit.get("jcr:path", ""),
             "page_path": _page_path(hit.get("jcr:path", "")),
             "resource_type": hit.get("sling:resourceType", ""),
+            # Only which property matched and how: no values are kept.
+            "match": match_kind(hit, term),
         }
         for hit in payload.get("hits", [])
         if hit.get("jcr:path")
     ]
+    # Hits holding the text itself first, those matching only inside a path last.
+    hits.sort(key=lambda hit: MATCH_ORDER.index(hit["match"]["kind"]))
     return dict(entry, status="found" if hits else "not_found",
                 total=payload.get("total", len(hits)), hits=hits)
 

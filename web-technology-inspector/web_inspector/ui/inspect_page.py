@@ -322,6 +322,18 @@ def _why(scanned: str, path: str, scope: str) -> str:
     return scope.lower() if scope else "elsewhere in AEM"
 
 
+def _match_label(match: dict | None) -> str:
+    if not match:
+        return ""
+    where = match.get("property") or ""
+    return {
+        "text": f"{where}: the text",
+        "words": f"{where}: all its words, not as one text",
+        "path": f"{where}: only inside a path or link (no screenshot)",
+        "indirect": "not in this node's own properties (no screenshot)",
+    }[match["kind"]].strip(": ")
+
+
 def _screenshot_targets(result: dict, analysis: dict) -> list[dict]:
     """What to screenshot for each AEM match: Page Properties when the match is
     on a page's own node, else that component instance's edit dialog. Each
@@ -331,6 +343,8 @@ def _screenshot_targets(result: dict, analysis: dict) -> list[dict]:
     for entry in analysis["aem_references"]:
         for hit in entry["hits"]:
             node, resource_type = hit["node_path"], hit["resource_type"]
+            if hit.get("match", {}).get("kind") in ("path", "indirect"):
+                continue  # the text isn't in this node's own text (e.g. only in an image's file name)
             if node.endswith("/jcr:content"):
                 page = hit["page_path"]
                 targets.setdefault(("page", page), {
@@ -577,7 +591,8 @@ def _aem_tab(result: dict, analysis: dict, target: str, searched: bool, key: tup
                         + ("" if entry["status"] != "error" else f", {entry['message']}"))
             if entry["hits"]:
                 st.dataframe(pd.DataFrame([
-                    {"Node": h["node_path"], "Page": h["page_path"], "Component": h["resource_type"]}
+                    {"Node": h["node_path"], "Page": h["page_path"], "Component": h["resource_type"],
+                     "Matched in": _match_label(h.get("match"))}
                     for h in entry["hits"]
                 ]), width="stretch", hide_index=True)
         st.caption("A reference shows where the value is stored, not proof that it caused a request. "

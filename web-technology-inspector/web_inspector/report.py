@@ -175,8 +175,8 @@ def html_report(report: dict) -> str:
         references = [(r.get("scope", r["root"]), h) for r in report.get("aem_references", []) for h in r["hits"]]
         if report.get("aem_references"):
             parts.append(f"<h2>Where AEM references “{escape(target)}”</h2>")
-            parts.append(_table(["Found in", "Node", "Page", "Component"],
-                                [[scope, h["node_path"], h["page_path"], h["resource_type"]]
+            parts.append(_table(["Found in", "Node", "Page", "Component", "Matched in"],
+                                [[scope, h["node_path"], h["page_path"], h["resource_type"], _match(h.get("match"))]
                                  for scope, h in references]))
 
     parts.append("<h2>Scan stages</h2>")
@@ -187,6 +187,14 @@ def html_report(report: dict) -> str:
     parts.append(f"<p class='muted'>{escape(report['application'])} {escape(report['version'])} · "
                  "read-only findings; attribution may be incomplete.</p></body></html>")
     return "\n".join(parts)
+
+
+def _match(match: dict | None) -> str:
+    if not match:
+        return ""
+    label = {"text": "the text", "words": "its words, not as one text",
+             "path": "only inside a path or link", "indirect": "not in the node's own properties"}[match["kind"]]
+    return f"{match['property']}: {label}" if match.get("property") else label
 
 
 def requests_csv(requests: list[dict]) -> str:

@@ -129,8 +129,15 @@ def _querybuilder(parameters):
         for nodes in REFERENCES.values()
         for path, resource_type in nodes
     }
+    def properties(path):  # p.hits=full: the node's own properties
+        if parameters.get("p.hits") != "full":
+            return {}
+        if path in COMPONENT_PROPS:
+            return COMPONENT_PROPS[path]
+        return PAGES.get(path[: -len("/jcr:content")], {}) if path.endswith("/jcr:content") else {}
+
     hits = [
-        {"jcr:path": path, "sling:resourceType": resource_types.get(path, "")}
+        dict(properties(path), **{"jcr:path": path, "sling:resourceType": resource_types.get(path, "")})
         for path in paths[:limit]
     ]
     return {

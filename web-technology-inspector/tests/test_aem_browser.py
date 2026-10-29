@@ -516,3 +516,24 @@ class LooseMatchTests(unittest.TestCase):
     def test_exact_text_still_comes_first(self):
         result = self.window.capture([AUTHOR + "/mnt/x"], "Stories we featured")
         self.assertEqual([f["matched"] for f in result["fields"]], ["exact"])
+
+
+IMAGE_ONLY = CORAL_LIKE.replace(
+    '<label>Analytics domain</label><input name="./analyticsDomain" value="tracking.example.com"></div>',
+    '<label>Image asset</label><input name="./fileReference" value="/content/dam/site/featured-stories.jpg"></div>')
+
+
+@unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
+class PathWordsTests(unittest.TestCase):
+    def test_words_of_an_image_file_name_are_not_a_match(self):
+        def prepare(context):
+            strict_author([])(context)
+            context.route(AUTHOR + "/mnt/**", lambda route: route.fulfill(
+                status=200, content_type="text/html", body=IMAGE_ONLY))
+
+        window = aem_browser.open_window("env_image", AUTHOR, show_browser=False,
+                                         prepare_context=prepare, timeout=20)
+        self.addCleanup(aem_browser.close_window, "env_image")
+        with mock.patch.object(aem_screens, "FIELD_WAIT_SECONDS", 0):
+            result = window.capture([AUTHOR + "/mnt/x"], "Featured stories..")
+        self.assertEqual(result["fields"], [])
