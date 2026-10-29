@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from .. import aem_browser, aem_lookup, aem_mock, database, mock_scan, preferences, site_credentials
-from ..aem_screens import AemLoginRequired, capture_component_dialog, capture_page_properties
+from ..aem_screens import AemLoginRequired
 from ..errors import friendly_error
 from ..config import settings
 from ..detection import EXPECTED_BEFORE_CONSENT, aem_code_folders, consent_violations
@@ -346,32 +346,23 @@ def _screenshot_targets(result: dict, analysis: dict) -> list[dict]:
 def _capture(result: dict, target_item: dict, term: str) -> dict:
     """One dialog capture as {"item", "result"}, {"item", "error"} or {"item", "sign_in"}.
 
-    Taken in the signed-in AEM window when there is one (AEM's UI only trusts
-    the browser the user signed in with); else in a new browser with a token."""
+    Taken in the signed-in AEM window (AEM's UI only trusts the browser the
+    user signed in with)."""
     environment = result["environment"]
     mock = aem_lookup.is_mock(environment)
     window = aem_browser.get_window(environment["id"])
     if mock and not window and sign_in_to_aem(environment):  # the sample sign-in needs no user action
         window = aem_browser.get_window(environment["id"])
+    if not window:
+        return {"item": target_item, "sign_in": True,
+                "reason": "Screenshots are taken in the AEM window you sign in with, and it isn't open."}
     term = term.strip()
     try:
-        if window and target_item["kind"] == "page":
+        if target_item["kind"] == "page":
             shot = aem_browser.capture_page_properties(window, target_item["path"], term)
-        elif window:
+        else:
             shot = aem_browser.capture_component_dialog(window, target_item["path"],
                                                         target_item["resource_type"], term)
-        else:
-            auth = environment_auth(environment, st.session_state["session_aem_tokens"])
-            if auth["method"] != "token":
-                return {"item": target_item, "sign_in": True,
-                        "reason": "Screenshots are taken in the AEM window you sign in with, and it isn't open."}
-            options = dict(show_browser=settings.show_browser)
-            if target_item["kind"] == "page":
-                shot = capture_page_properties(environment["author_base"], target_item["path"], term,
-                                               auth["auth"], **options)
-            else:
-                shot = capture_component_dialog(environment["author_base"], target_item["path"],
-                                                target_item["resource_type"], term, auth["auth"], **options)
         return {"item": target_item, "result": shot}
     except aem_browser.WindowClosed:
         return {"item": target_item, "sign_in": True,
@@ -382,13 +373,10 @@ def _capture(result: dict, target_item: dict, term: str) -> dict:
                 f"Landed on {exc.landed}" + (f" (“{exc.title}”)" if exc.title else ""),
                 "Send this message to the developer to adjust the screenshot address.",
             ]}}
-        if window:
-            # Leave the window open: the sign-in page is in it, and can be finished there.
-            return {"item": target_item, "sign_in": True, "in_window": True, "landed": exc.landed,
-                    "blocked": exc.blocked,
-                    "reason": "AEM showed a sign-in page in the AEM window instead of the dialog."}
-        return {"item": target_item, "sign_in": True, "landed": exc.landed, "blocked": exc.blocked,
-                "reason": "AEM showed a sign-in page instead of the dialog."}
+        # Leave the window open: the sign-in page is in it, and can be finished there.
+        return {"item": target_item, "sign_in": True, "in_window": True, "landed": exc.landed,
+                "blocked": exc.blocked,
+                "reason": "AEM showed a sign-in page in the AEM window instead of the dialog."}
     except Exception as exc:  # noqa: BLE001 - shown to the user as a friendly error
         error = friendly_error(exc)
         return {"item": target_item, "error": {"title": error.title, "reasons": error.reasons}}

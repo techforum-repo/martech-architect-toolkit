@@ -1,17 +1,11 @@
-"""Screenshots of AEM author UI, e.g. a page's Page Properties with the
-field that holds a value highlighted.
+"""Screenshots of AEM author UI: a page's Page Properties or a component's
+edit dialog, opened on the tab holding a value, with its field highlighted.
 
-Authors that don't accept the AEM token for UI pages need a one-time
-sign-in (sign_in): a visible browser opens on author, the user logs in as
-usual, and the resulting browser session is reused for screenshots. That
-session works like a password, so callers keep it in memory only.
-
-Read-only by construction, because author UI pages run their own scripts:
-- every request to author that isn't GET, HEAD or OPTIONS is aborted;
-- the AEM token is added only to requests to the author origin, never to
-  the CDNs and other hosts the UI loads;
-- nothing is clicked except dialog tabs, and nothing is typed.
-The highlight is a style change in this browser only.
+Taken in the signed-in AEM window (aem_browser): AEM's UI only trusts the
+browser the user signed in with. This module has what runs in that window:
+the field and tab search, tab opening, the capture itself, and the optional
+no-saving rule (blocks_write). Nothing is clicked except dialog tabs, and
+nothing is typed; the highlight is a style change in that browser only.
 """
 
 from __future__ import annotations
@@ -21,7 +15,6 @@ from urllib.parse import quote, unquote, urlsplit
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
-from playwright.sync_api import sync_playwright
 
 READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 FIELD_WAIT_SECONDS = 10
@@ -219,39 +212,6 @@ def _signed_in(page, context, author_base: str) -> bool:
     return on_author and has_session
 
 
-def sign_in(author_base: str, *, timeout: int = 300, show_browser: bool = True,
-            prepare_context=None) -> dict:
-    """Open author in a browser, wait for the user to log in, return the session.
-
-    Returns Playwright storage state (cookies) plus "user_agent", for reuse
-    in capture calls: Adobe's sign-in may not accept the session from a
-    browser that identifies itself differently (e.g. as HeadlessChrome).
-    The window closes by itself once author is reached with a login session.
-    """
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=not show_browser)
-        try:
-            context = browser.new_context(viewport={"width": 1280, "height": 900})
-            if prepare_context:
-                prepare_context(context)
-            page = context.new_page()
-            page.goto(author_base.rstrip("/") + "/aem/start.html", wait_until="domcontentloaded",
-                      timeout=60_000)
-            for _ in range(timeout):
-                if page.is_closed():
-                    raise SignInIncomplete("The sign-in window was closed before signing in")
-                if _signed_in(page, context, author_base):
-                    try:  # let author finish its post-login requests and cookies
-                        page.wait_for_load_state("networkidle", timeout=10_000)
-                    except PlaywrightTimeout:
-                        pass
-                    return dict(context.storage_state(), user_agent=page.evaluate("navigator.userAgent"))
-                page.wait_for_timeout(1000)
-            raise SignInIncomplete(f"Not signed in within {timeout // 60} minutes")
-        finally:
-            browser.close()
-
-
 def properties_url(author_base: str, page_path: str) -> str:
     return author_base.rstrip("/") + PROPERTIES_PATH + "?item=" + quote(page_path, safe="/:")
 
@@ -298,23 +258,6 @@ def blocks_write(method: str, url: str, author_base: str) -> bool:
                for root in SAVE_ROOTS) or any(path.startswith(s) for s in SAVE_SERVLETS)
 
 
-def _guard(context, author_base: str, token: str | None, blocked: list[str]) -> None:
-    origin = _origin(author_base)
-
-    def handle(route):
-        request = route.request
-        if blocks_write(request.method, request.url, author_base):
-            blocked.append(f"{request.method} {request.url}")
-            route.abort()
-            return
-        if token and _origin(request.url) == origin:
-            route.fallback(headers={**request.headers, "authorization": "Bearer " + token})
-        else:
-            route.fallback()
-
-    context.route("**/*", handle)
-
-
 def component_dialog_urls(author_base: str, node_path: str, resource_type: str) -> list[str]:
     """Addresses of a component instance's edit dialog, as the page editor opens it.
 
@@ -331,16 +274,6 @@ def component_dialog_urls(author_base: str, node_path: str, resource_type: str) 
     # ":" stays literal (jcr:content), as in the addresses the page editor uses.
     return [f"{base}/mnt/override/{root}/{quote(rt, safe='/')}/_cq_dialog.html{quote(node_path, safe='/:')}"
             for root in roots]
-
-
-def _identity(storage_state: dict | None, browser_version: str) -> tuple[dict | None, str]:
-    """(storage state for Playwright, user agent): the sign-in browser's agent
-    if known, else a regular, non-headless Chrome agent."""
-    from .scanner import _desktop_user_agent
-    if not storage_state:
-        return None, _desktop_user_agent(browser_version)
-    state = {k: v for k, v in storage_state.items() if k in ("cookies", "origins")}
-    return state, storage_state.get("user_agent") or _desktop_user_agent(browser_version)
 
 
 def _find_fields(page, term: str):
@@ -439,51 +372,3 @@ def _capture_in_page(page, author_base: str, urls: list[str], term: str, blocked
         "no_match": None if captured else _no_match(page, term),
         "blocked_writes": list(blocked),
     }
-
-
-def _capture_dialogs(author_base: str, urls: list[str], term: str, token: str | None, *,
-                     show_browser: bool, timeout: int, storage_state: dict | None, prepare_context) -> dict:
-    """In a new browser: open the first of urls that renders and screenshot matching fields."""
-    blocked: list[str] = []
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=not show_browser)
-        try:
-            state, user_agent = _identity(storage_state, browser.version)
-            context = browser.new_context(viewport={"width": 1440, "height": 1000},
-                                          service_workers="block", accept_downloads=False,
-                                          storage_state=state, user_agent=user_agent)
-            if prepare_context:
-                prepare_context(context)
-            _guard(context, author_base, token, blocked)  # registered last: runs first
-            return _capture_in_page(context.new_page(), author_base, urls, term, blocked, timeout)
-        finally:
-            browser.close()
-
-
-def capture_page_properties(author_base: str, page_path: str, term: str, token: str | None, *,
-                            show_browser: bool = False, timeout: int = 60,
-                            storage_state: dict | None = None, prepare_context=None) -> dict:
-    """Open Page Properties for the page and screenshot each field containing term.
-
-    Authenticates with the AEM token, or with a sign_in() session passed as
-    storage_state (token may then be None).
-
-    Returns {"url", "status", "fields": [{"label", "name", "value", "image"}],
-    "page_image", "blocked_writes"}. Raises AemLoginRequired when the dialog
-    doesn't open on author. prepare_context: test hook to serve a fixture
-    author (registered first, so the read-only guard still runs in front of it).
-    """
-    return _capture_dialogs(author_base, [properties_url(author_base, page_path)], term, token,
-                            show_browser=show_browser, timeout=timeout, storage_state=storage_state,
-                            prepare_context=prepare_context)
-
-
-def capture_component_dialog(author_base: str, node_path: str, resource_type: str, term: str,
-                             token: str | None, *, show_browser: bool = False, timeout: int = 60,
-                             storage_state: dict | None = None, prepare_context=None) -> dict:
-    """Open one component instance's edit dialog and screenshot each field containing term.
-
-    Same result and errors as capture_page_properties."""
-    return _capture_dialogs(author_base, component_dialog_urls(author_base, node_path, resource_type), term,
-                            token, show_browser=show_browser, timeout=timeout, storage_state=storage_state,
-                            prepare_context=prepare_context)

@@ -127,15 +127,6 @@ the AEM Groovy Runner (`../aem-groovy-runner`), with the `/apps/<project>`
 folder taken from the page's `/etc.clientlibs/<project>/` URLs. That script
 reads clientlib JavaScript, HTL and CSS directly, read-only.
 
-`scripts/aem_spike.py` runs these lookups for one URL from the command line,
-which is a quick way to check what your AEM user may call:
-
-```bash
-.venv/bin/python scripts/aem_spike.py https://www.your-site.com/us/en/page.html \
-    --author https://author-pXXXX-eYYYY.adobeaemcloud.com \
-    --prefix /us/en --root /content/your-site/us/en --term tracking.your-vendor.com
-```
-
 ### AEM screenshots
 
 When **Search AEM** finds the target, the app takes a screenshot of where it is
@@ -154,21 +145,18 @@ to the field is opened, outermost first, and the caption shows the path (for
 example "Analytics › Tracking"). Page Properties of any other page can be captured from
 **Screenshot another page's properties**. In mock mode a sample author is used.
 
-Screenshots are taken in the AEM window you signed in with. If it isn't open,
-the app asks you to **Sign in to AEM** at the top and takes the screenshots
-right after. The sign-in
-is kept in memory for the session only, never on disk, because it works like
-a password for your AEM account.
+Screenshots are taken in the AEM window you signed in with (AEM's UI only
+trusts that browser). If it isn't open, the app asks you to **Sign in to
+AEM** at the top and takes the screenshots right after. How the sign-in is
+kept, and the optional saving block, are under **AEM window settings** (see
+step 3 above).
 
-The author UI runs its own scripts, so the screenshot browser is locked down:
-every request to your author that isn't a read is blocked, the token (when
-used) is attached only to requests to your author, and nothing is clicked
-except dialog tabs. Requests to other sites, such as Adobe's sign-in service
-refreshing the login, are not blocked: they can't change anything in AEM, and
-blocking them makes AEM's UI ask for a sign-in.
-
-`scripts/aem_screenshot_spike.py` does the same from the command line and
-saves the images under `data/screenshots/`.
+To find the field, the app looks in field values (including the hidden value
+behind a code or rich-text editor), then in attributes an editor keeps it in,
+then in the dialog's text. Each screenshot names its tab, and says how the
+tab was found. When nothing in the dialog matches, it lists the dialog's tabs
+and whether the value is in the dialog at all. Nothing is clicked except
+dialog tabs, and nothing is typed.
 
 ## Scanning notes
 

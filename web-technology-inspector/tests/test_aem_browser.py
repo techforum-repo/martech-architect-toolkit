@@ -6,7 +6,6 @@ import unittest
 from unittest import mock
 
 from web_inspector import aem_browser, aem_screens
-from web_inspector.aem_screens import AemLoginRequired, capture_page_properties
 from tests.test_scanner import browser_available
 
 AUTHOR = "https://author-p9-e9.adobeaemcloud.com"
@@ -61,14 +60,6 @@ class AemWindowTests(unittest.TestCase):
         result = aem_browser.capture_page_properties(self.window, "/content/site/en", "tracking.example.com")
         self.assertEqual([f["label"] for f in result["fields"]], ["Analytics domain"])
         self.assertTrue(result["fields"][0]["visible"])
-
-    def test_a_new_browser_is_sent_to_adobe_sign_in(self):
-        # What happened on the real author before: the copied cookies aren't enough.
-        with self.assertRaises(AemLoginRequired) as raised:
-            capture_page_properties(AUTHOR, "/content/site/en", "tracking.example.com", None,
-                                    storage_state=self.window.storage_state,
-                                    prepare_context=strict_author([]))
-        self.assertTrue(raised.exception.sign_in_page)
 
     def test_window_is_read_only_after_sign_in(self):
         result = aem_browser.capture_page_properties(self.window, "/content/site/en", "tracking.example.com")
