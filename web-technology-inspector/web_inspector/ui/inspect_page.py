@@ -440,11 +440,13 @@ def _show_captures(captures: dict, target: str) -> None:
                 st.code("\n".join(shot["failed_responses"][:40]), language=None)
         for number, field in enumerate(shot["fields"], 1):
             where = " › ".join(field.get("tabs") or [])
+            kind = {"hidden value": " (stored value of the field)", "text": " (text in the dialog)"}.get(
+                field.get("kind"), "")
+            st.markdown(f"**Tab: {where}**" if where else "**Tab: none** (the match isn't on a tab)")
+            st.caption(f"{field['label'] or field['name'] or 'Match'}{kind}: {field['value'][:160]}")
             if field.get("visible") is False:
                 st.caption("The field's tab couldn't be opened, so it may not show in this screenshot.")
-            st.image(field["image"], width="stretch",
-                     caption=(f"Tab: {where} · " if where else "")
-                     + f"{field['label'] or field['name']} = {field['value'][:120]}")
+            st.image(field["image"], width="stretch")
             with st.expander("How the tab was chosen"):
                 st.markdown(f"- Tab path found: **{where or 'none'}** ({', '.join(field.get('found_by') or [])})\n"
                             f"- Tab showing in the screenshot: **{', '.join(field.get('shown_tabs') or []) or 'unknown'}**\n"

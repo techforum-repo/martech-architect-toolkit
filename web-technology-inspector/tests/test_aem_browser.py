@@ -368,3 +368,40 @@ class AemWindowChoiceTests(unittest.TestCase):
         field = result["fields"][0]
         self.assertEqual(field["found_by"], ["aria-controls"])
         self.assertIn("coral-panel#p2", field["where"])
+
+
+SCRIPT_FIELDS = CORAL_LIKE.replace(
+    # Advanced: a code-editor field, its value in a hidden input.
+    '<label>Analytics domain</label><input name="./analyticsDomain" value="tracking.example.com"></div>',
+    '<label>Header scripts</label><input type="hidden" name="./headScripts" '
+    'value="&lt;script src=&quot;https://tracking.example.com/a.js&quot;&gt;&lt;/script&gt;">'
+    '<div class="editor">(code editor)</div></div>').replace(
+    # Custom: the value only as text an editor shows.
+    '<label>Tag host</label><input name="./tagHost" value="tags.example.com"></div>',
+    '<label>Notes</label><div contenteditable>Loads from cdn.example.net</div></div>')
+
+
+@unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
+class AemWindowScriptFieldTests(unittest.TestCase):
+    def setUp(self):
+        def prepare(context):
+            strict_author([])(context)
+            context.route(AUTHOR + "/mnt/**", lambda route: route.fulfill(
+                status=200, content_type="text/html", body=SCRIPT_FIELDS))
+
+        self.window = aem_browser.open_window("env_script", AUTHOR, show_browser=False,
+                                              prepare_context=prepare, timeout=20)
+        self.addCleanup(aem_browser.close_window, "env_script")
+
+    def test_domain_in_a_hidden_script_value_opens_its_tab(self):
+        result = self.window.capture([AUTHOR + "/mnt/x"], "tracking.example.com")
+        field = result["fields"][0]
+        self.assertEqual((field["tabs"], field["kind"], field["label"]), (["Advanced"], "hidden value", "Header scripts"))
+        self.assertTrue(field["visible"])  # the field around the hidden input
+
+    def test_domain_only_in_text_opens_its_tab(self):
+        with mock.patch.object(aem_screens, "FIELD_WAIT_SECONDS", 0):
+            result = self.window.capture([AUTHOR + "/mnt/x"], "cdn.example.net")
+        field = result["fields"][0]
+        self.assertEqual((field["tabs"], field["kind"]), (["Custom"], "text"))
+        self.assertTrue(field["visible"])

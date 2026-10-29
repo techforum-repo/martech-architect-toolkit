@@ -68,15 +68,15 @@ FIND_FIELDS_SCRIPT = """term => {
     const unchosen = field => (field.matches('option') && !field.selected)
         || (field.matches('coral-select-item, coral-selectlist-item, coral-autocomplete-item')
             && !field.hasAttribute('selected'));
-    const results = [];
-    const fields = [...document.querySelectorAll('input, textarea, select, [value]')];
-    fields.forEach((field, index) => {
-        const value = (field.value ?? field.getAttribute('value') ?? '').toString();
-        if (!value.toLowerCase().includes(lowered) || field.type === 'hidden' || unchosen(field)) return;
-        const wrapper = field.closest('.coral-Form-fieldwrapper, .coral-Form-field, .foundation-field-edit') || field.parentElement;
+    const WRAPPER = '.coral-Form-fieldwrapper, .coral-Form-field, .foundation-field-edit';
+    const results = [], seen = new Set();
+    const add = (element, value, name, kind) => {
+        if (seen.has(element)) return;  // several hidden inputs of one field
+        seen.add(element);
+        const wrapper = element.closest(WRAPPER) || element.parentElement;
         const label = wrapper && wrapper.querySelector('label, .coral-Form-fieldlabel');
         const tabs = [], how = [];
-        for (let panel = field.closest(PANEL); panel; panel = panel.parentElement && panel.parentElement.closest(PANEL)) {
+        for (let panel = element.closest(PANEL); panel; panel = panel.parentElement && panel.parentElement.closest(PANEL)) {
             const [tab, found] = tabFor(panel);
             how.unshift(found);
             if (tab) {
@@ -85,13 +85,36 @@ FIND_FIELDS_SCRIPT = """term => {
             }
         }
         if (!how.length) how.push('the field is in no tab panel');
-        const marker = String(index);
-        field.setAttribute('data-wti-match', marker);
+        const marker = String(results.length);
+        element.setAttribute('data-wti-match', marker);
         tabs.forEach((tab, depth) => tab.setAttribute('data-wti-tab-' + marker + '-' + depth, ''));
-        results.push({marker, name: field.getAttribute('name') || '', label: label ? label.textContent.trim() : '',
+        results.push({marker, name, label: label ? label.textContent.trim() : '', kind,
                       value: value.slice(0, 300), tabs: tabs.map(t => t.textContent.trim()), depth: tabs.length,
-                      found_by: how, where: describe(field)});
+                      found_by: how, where: describe(element)});
+    };
+    // 1. Field values, including hidden inputs: code editors and rich text keep
+    // their value in one, shown by an editor next to it; that field is marked.
+    document.querySelectorAll('input, textarea, select, [value]').forEach(field => {
+        const value = (field.value ?? field.getAttribute('value') ?? '').toString();
+        if (!value.toLowerCase().includes(lowered) || unchosen(field)) return;
+        const hidden = field.type === 'hidden';
+        const shown = hidden ? field.closest(WRAPPER) : field;
+        if (!shown) return;  // a hidden input outside any field: form state, not content
+        add(shown, value, field.getAttribute('name') || '', hidden ? 'hidden value' : 'field');
     });
+    // 2. Else text in the dialog, e.g. as an editor displays it.
+    if (!results.length) {
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node && results.length < 10; node = walker.nextNode()) {
+            const element = node.parentElement;
+            if (!element || element.closest('script, style, noscript, template, title')) continue;
+            const text = node.textContent;
+            const at = text.toLowerCase().indexOf(lowered);
+            if (at < 0) continue;
+            add(element.closest(WRAPPER) || element, text.slice(Math.max(0, at - 80), at + lowered.length + 80).trim(),
+                '', 'text');
+        }
+    }
     return results;
 }"""
 
@@ -356,7 +379,7 @@ def _capture_in_page(page, author_base: str, urls: list[str], term: str, blocked
             captured.append({
                 "label": field["label"], "name": field["name"], "value": field["value"],
                 "tabs": field["tabs"], "visible": page.evaluate(FIELD_VISIBLE_SCRIPT, field["marker"]),
-                "found_by": field["found_by"], "where": field["where"],
+                "found_by": field["found_by"], "where": field["where"], "kind": field["kind"],
                 "shown_tabs": page.evaluate(SHOWN_TABS_SCRIPT),
                 "image": page.screenshot(full_page=False, animations="disabled"),
             })
