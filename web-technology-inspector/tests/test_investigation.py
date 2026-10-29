@@ -53,3 +53,17 @@ class InvestigationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScreenshotTargetTests(unittest.TestCase):
+    def test_targets_say_why_they_were_chosen(self):
+        from web_inspector.ui.inspect_page import _screenshot_targets
+        result = run(consent="accept")
+        analysis = analyze_target(result, "tracking.example.com")
+        titles = {t["path"]: t["title"] for t in _screenshot_targets(result, analysis)}
+        self.assertIn("parent page of the scanned page; /content/example/us/en/products inherits this value",
+                      titles["/content/example/us/en"])
+        self.assertIn("on the scanned page",
+                      titles["/content/example/us/en/products/jcr:content/root/container/embed"])
+        self.assertIn("experience fragment used by the scanned page",
+                      titles["/content/experience-fragments/example/us/en/site/footer/master/jcr:content/root/html"])

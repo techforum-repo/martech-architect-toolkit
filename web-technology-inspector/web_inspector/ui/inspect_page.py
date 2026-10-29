@@ -278,24 +278,40 @@ MAX_AUTO_SCREENSHOTS = 6
 
 def _properties_pages(result: dict, analysis: dict) -> list[str]:
     """The scanned page, then any page whose own properties matched the search."""
-    pages = [t["path"] for t in _screenshot_targets(analysis) if t["kind"] == "page"]
+    pages = [t["path"] for t in _screenshot_targets(result, analysis) if t["kind"] == "page"]
     return list(dict.fromkeys([result["aem_page"]["content_path"]] + pages))
 
 
-def _screenshot_targets(analysis: dict) -> list[dict]:
+def _why(scanned: str, path: str, scope: str) -> str:
+    """Why a dialog was chosen, relative to the scanned page."""
+    if path == scanned or path.startswith(scanned + "/jcr:content/"):
+        return "on the scanned page"
+    if scanned.startswith(path + "/"):
+        return f"parent page of the scanned page; {scanned} inherits this value"
+    if scope == "Experience fragment" or path.startswith("/content/experience-fragments/"):
+        return "experience fragment used by the scanned page"
+    return scope.lower() if scope else "elsewhere in AEM"
+
+
+def _screenshot_targets(result: dict, analysis: dict) -> list[dict]:
     """What to screenshot for each AEM match: Page Properties when the match is
-    on a page's own node, else that component instance's edit dialog."""
+    on a page's own node, else that component instance's edit dialog. Each
+    target says why it was chosen, relative to the scanned page."""
+    scanned = result["aem_page"]["content_path"]
     targets = {}
     for entry in analysis["aem_references"]:
         for hit in entry["hits"]:
             node, resource_type = hit["node_path"], hit["resource_type"]
             if node.endswith("/jcr:content"):
-                targets.setdefault(("page", hit["page_path"]), {
-                    "kind": "page", "path": hit["page_path"], "title": "Page Properties of " + hit["page_path"]})
+                page = hit["page_path"]
+                targets.setdefault(("page", page), {
+                    "kind": "page", "path": page,
+                    "title": f"Page Properties of {page} ({_why(scanned, page, entry['scope'])})"})
             elif node.startswith("/content/") and resource_type and not resource_type.startswith("property "):
                 targets.setdefault(("component", node), {
                     "kind": "component", "path": node, "resource_type": resource_type,
-                    "title": f"{resource_type.rsplit('/', 1)[-1]} component at {node}"})
+                    "title": f"{resource_type.rsplit('/', 1)[-1]} component at {node} "
+                             f"({_why(scanned, node, entry['scope'])})"})
     return list(targets.values())
 
 
@@ -364,7 +380,7 @@ def _capture_pages(result: dict, targets: list[dict], term: str, key: tuple) -> 
 
 def auto_capture(result: dict, analysis: dict, target: str, key: tuple) -> None:
     """After Search AEM: screenshot the dialog behind each match."""
-    targets = _screenshot_targets(analysis)[:MAX_AUTO_SCREENSHOTS]
+    targets = _screenshot_targets(result, analysis)[:MAX_AUTO_SCREENSHOTS]
     if targets:
         _capture_pages(result, targets, target, key)
     else:
@@ -414,6 +430,7 @@ def _properties_screenshot(result: dict, analysis: dict, target: str, key: tuple
     if not target.strip():
         st.info("Choose or type a target above.")
         return
+    st.caption(f"Scanned page: `{result['aem_page']['content_path']}`")
 
     captures = st.session_state.get("properties_captures")
     current = captures if captures and captures["key"] == key else None
@@ -447,7 +464,9 @@ def _properties_screenshot(result: dict, analysis: dict, target: str, key: tuple
     with st.expander("Screenshot another page's properties"):
         page = st.selectbox("Page", _properties_pages(result, analysis), key="properties_page")
         if st.button("Screenshot Page Properties in AEM"):
-            _capture_pages(result, [{"kind": "page", "path": page, "title": "Page Properties of " + page}],
+            scanned = result["aem_page"]["content_path"]
+            _capture_pages(result, [{"kind": "page", "path": page,
+                                     "title": f"Page Properties of {page} ({_why(scanned, page, '')})"}],
                            target, key)
             st.rerun()
 
