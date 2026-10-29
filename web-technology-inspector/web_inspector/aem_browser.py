@@ -29,6 +29,14 @@ from .aem_screens import (
     properties_url,
 )
 
+SIGNED_IN_NOTICE = """<!doctype html><title>AEM - signed in</title>
+<body style="font: 16px system-ui, sans-serif; margin: 3rem; max-width: 40rem; color: #222">
+<h2>Signed in to AEM</h2>
+<p>Web Technology Inspector takes its AEM screenshots in this window. Keep it open;
+closing it signs out.</p>
+<p>The window is read-only: AEM can't save anything from it, so AEM pages opened
+here by hand may show errors where they would save.</p></body>"""
+
 _windows: dict[str, "AemWindow"] = {}
 _lock = threading.Lock()
 
@@ -122,6 +130,10 @@ class AemWindow:
                     # Signing in is done: from now on the window may only read.
                     self._guard(context)
                     self.storage_state = context.storage_state()
+                    # AEM's start page saves things as it loads, which the guard
+                    # refuses, so it shows an error. It isn't needed: say what
+                    # the window is for instead. Same tab, so the sign-in stays.
+                    page.set_content(SIGNED_IN_NOTICE)
                     self._ready.set()
                     self._serve(page)
                 finally:

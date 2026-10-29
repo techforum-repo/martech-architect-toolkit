@@ -150,3 +150,14 @@ class AemWindowLateFormTests(unittest.TestCase):
             self.window.capture([AUTHOR + "/mnt/late/properties.html"], "tracking.example.com")
         time.sleep(4)
         self.assertTrue(any(url.endswith("/mnt/form.html") for _, url in self.seen))
+
+
+@unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
+class AemWindowNoticeTests(unittest.TestCase):
+    def test_window_shows_a_notice_and_keeps_the_sign_in(self):
+        window = aem_browser.open_window("env_notice", AUTHOR, show_browser=False,
+                                         prepare_context=strict_author([]), timeout=20)
+        self.addCleanup(aem_browser.close_window, "env_notice")
+        # The dialog still sees the tab's sign-in after the notice replaced the start page.
+        result = aem_browser.capture_page_properties(window, "/content/site/en", "tracking.example.com")
+        self.assertEqual([f["label"] for f in result["fields"]], ["Analytics domain"])
