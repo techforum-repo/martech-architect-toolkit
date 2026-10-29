@@ -398,15 +398,42 @@ class DialogNotOpened(RuntimeError):
 
 
 def _not_opened(page, message: str, step: str, node_path: str) -> DialogNotOpened:
-    try:
-        state = page.evaluate(EDITOR_STATE_SCRIPT, node_path)
-    except PlaywrightError:
-        state = {}
+    state = {}
+    for frame in _frames_editor_first(page):
+        try:
+            state = frame.evaluate(EDITOR_STATE_SCRIPT, node_path)
+        except PlaywrightError:
+            continue
+        if state.get("api") or state.get("overlays"):
+            break
+    state["frames"] = [frame.url.split("?")[0] for frame in page.frames][:8]
     try:
         image = page.screenshot(full_page=False, animations="disabled")
     except PlaywrightError:
         image = None
     return DialogNotOpened(message, step=step, state=state, image=image)
+
+
+def _frames_editor_first(page) -> list:
+    """The tab's frames, those showing the page editor first: on AEM as a
+    Cloud Service the editor can run in a frame of the Unified Shell."""
+    return sorted(page.frames, key=lambda frame: "/editor.html/" not in frame.url)
+
+
+def _editor_status(page, node_path: str):
+    """(frame, status) of the frame furthest along (EDITOR_READY_SCRIPT)."""
+    best, best_status = None, ""
+    rank = {"": 0, "loaded": 1, "found": 2}
+    for frame in _frames_editor_first(page):
+        try:
+            status = frame.evaluate(EDITOR_READY_SCRIPT, node_path) or ""
+        except PlaywrightError:
+            continue  # navigating, or gone
+        if rank.get(status, 0) > rank[best_status]:
+            best, best_status = frame, status
+            if status == "found":
+                break
+    return best, best_status
 
 
 def _settle(page) -> None:
@@ -460,7 +487,12 @@ def _capture_in_editor(page, author_base: str, node_path: str, term: str, blocke
     attempts = [{"url": url, "status": response.status if response else None}]
     _settle(page)
     _require_author(page, author_base, blocked, "page editor")
-    status = _poll(page, EDITOR_READY_SCRIPT, node_path, EDITOR_WAIT_SECONDS, "found")
+    frame, status = None, ""
+    for _ in range(EDITOR_WAIT_SECONDS * 2):
+        frame, status = _editor_status(page, node_path)
+        if status == "found":
+            break
+        page.wait_for_timeout(500)
     if status == "loaded":
         raise _not_opened(page, f"The page editor of {page_path} has no editable component at {node_path} "
                           "(it may come from the template or a locked structure).", "finding the component",
@@ -470,22 +502,32 @@ def _capture_in_editor(page, author_base: str, node_path: str, term: str, blocke
                           f"within {EDITOR_WAIT_SECONDS} seconds", "editor loading", node_path)
 
     try:
-        how = page.evaluate(OPEN_DIALOG_SCRIPT, node_path)
+        how = frame.evaluate(OPEN_DIALOG_SCRIPT, node_path)
     except PlaywrightError:
         how = "no-api"
     if how == "no-api":
         # As an author would: select the component, then the wrench (Configure).
         how = "wrench click"
         try:
-            page.locator(f'.cq-Overlay[data-path="{node_path}"]').first.click(timeout=10_000)
-            page.locator('button[data-action="CONFIGURE"]').first.click(timeout=10_000)
+            frame.locator(f'.cq-Overlay[data-path="{node_path}"]').first.click(timeout=10_000)
+            frame.locator('button[data-action="CONFIGURE"]').first.click(timeout=10_000)
         except PlaywrightError as exc:
             raise _not_opened(page, f"Couldn't select {node_path} and click its wrench in the page editor",
                               "clicking the component", node_path) from exc
 
-    opened = _poll(page, DIALOG_OPEN_SCRIPT, EDITOR_DIALOG, DIALOG_WAIT_SECONDS, "inline", editor=url)
+    opened = ""
+    for _ in range(DIALOG_WAIT_SECONDS * 2):
+        if not any("/editor.html/" in f.url for f in page.frames):
+            opened = "newpage"  # the editor's dialogMode opened it as a page of its own
+            break
+        try:
+            opened = frame.evaluate(DIALOG_OPEN_SCRIPT, EDITOR_DIALOG) or ""
+        except PlaywrightError:
+            opened = ""
+        if opened == "inline":
+            break
+        page.wait_for_timeout(500)
     if opened == "newpage":
-        # The editor's dialogMode opened it as a page of its own: match in that page.
         _settle(page)
         return _capture_matches(page, term, page.url, None, attempts, blocked)
     if opened != "inline":
@@ -495,24 +537,6 @@ def _capture_in_editor(page, author_base: str, node_path: str, term: str, blocke
                           "waiting for the dialog", node_path)
     page.wait_for_timeout(500)  # the dialog's opening animation
     return _capture_matches(page, term, url, attempts[0]["status"], attempts, blocked, root=DIALOG_ROOT)
-
-
-def _poll(page, script: str, arg, seconds: int, wanted: str, *, editor: str | None = None) -> str:
-    """Run script every half second until it returns wanted, for up to
-    seconds; return its last answer. With editor, "newpage" when the tab
-    left the editor (a dialog opened as a page of its own)."""
-    last = ""
-    for _ in range(seconds * 2):
-        if editor and not page.url.split("?")[0].startswith(editor):
-            return "newpage"
-        try:
-            last = page.evaluate(script, arg) or ""
-        except PlaywrightError:
-            last = ""  # navigating meanwhile
-        if last == wanted:
-            return last
-        page.wait_for_timeout(500)
-    return last
 
 
 def _capture_matches(page, term: str, url: str, status, attempts: list[dict], blocked: list[str],

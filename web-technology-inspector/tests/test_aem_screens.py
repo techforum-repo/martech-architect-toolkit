@@ -66,6 +66,14 @@ EDITOR_API = """edit: {ToolbarActions: {CONFIGURE: {execute(e) {
 EDITOR_NEWPAGE = """edit: {ToolbarActions: {CONFIGURE: {execute(e) {
         location.href = '/mnt/override/apps/site/embed/_cq_dialog.html' + e.path; }}}},"""
 
+# AEM as a Cloud Service with the Unified Shell: the editor address shows the
+# shell, and the page editor (with Granite.author) runs in a frame inside it.
+SHELL = """<!doctype html><html><body style="margin:0">
+<script>fetch('https://data.status.adobe.com/adobestatus/StatusEvents').catch(() => {});</script>
+<div style="height:48px;background:#333;color:#fff">Adobe Experience Cloud</div>
+<iframe src="/editor.html/content/site/en.html?appId=aemshell" style="border:0;width:100%;height:900px"></iframe>
+</body></html>"""
+
 # No usable editor API: select the component, then the wrench, as an author would.
 EDITOR_WRENCH = """document.querySelector('.cq-Overlay').addEventListener('click', () => {
     document.body.insertAdjacentHTML('beforeend', '<button data-action="CONFIGURE">Configure</button>');
@@ -186,10 +194,14 @@ class CaptureTests(unittest.TestCase):
 
 @unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
 class ComponentDialogTests(unittest.TestCase):
-    def window(self, editor):
+    shell = False
+
+    def window(self, editor, shell=False):
+        self.shell = shell
         def serve(route):
             if route.request.url.startswith(AUTHOR + "/editor.html/content/site/en.html"):
-                html(editor)(route)
+                shell = self.shell and "appId=aemshell" not in route.request.url
+                html(SHELL if shell else editor)(route)
             elif "/_cq_dialog.html" in route.request.url:
                 html(DIALOG)(route)
             else:
@@ -206,6 +218,13 @@ class ComponentDialogTests(unittest.TestCase):
         self.assertEqual((field["label"], field["tabs"]), ("analyticsJS", ["Scripts"]))
         self.assertTrue(field["visible"])
         self.assertEqual(result["url"], AUTHOR + "/editor.html/content/site/en.html")
+
+    def test_editor_inside_the_unified_shell(self):
+        window = self.window(EDITOR % {"path": EMBED, "api": EDITOR_API, "wrench": ""}, shell=True)
+        result = aem_browser.capture_component_dialog(window, EMBED, "tracking.example.com")
+        [field] = result["fields"]  # found in the shell's editor frame, inside the dialog only
+        self.assertEqual((field["label"], field["tabs"]), ("analyticsJS", ["Scripts"]))
+        self.assertTrue(field["visible"])
 
     def test_dialog_opened_as_a_page_of_its_own(self):
         window = self.window(EDITOR % {"path": EMBED, "api": EDITOR_NEWPAGE, "wrench": ""})

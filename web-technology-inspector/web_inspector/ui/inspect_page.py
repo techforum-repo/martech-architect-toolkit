@@ -429,6 +429,9 @@ def _show_captures(captures: dict, target: str) -> None:
                             f"editor says a dialog is open: **{'yes' if state.get('dialog_open') else 'no'}**\n"
                             f"- Components known: {state.get('editables')}, overlays: {state.get('overlays')}\n"
                             f"- Dialogs on the page: {', '.join(state.get('dialogs') or []) or 'none'}")
+                        if state.get("frames"):
+                            st.caption("Frames in the tab (the editor may run in one, e.g. in the Unified Shell):")
+                            st.code("\n".join(state["frames"]), language=None)
                         st.caption("Component paths in the editor, closest to the one searched first:")
                         st.code("\n".join(state.get("closest_paths") or []) or "(none)", language=None)
                     if editor.get("image"):
