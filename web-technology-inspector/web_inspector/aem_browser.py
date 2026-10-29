@@ -8,15 +8,23 @@ Playwright objects belong to the thread that created them, and Streamlit runs
 each rerun on a new thread, so one worker thread per window owns Playwright
 and runs commands sent to it through a queue.
 
-No saving: once signed in, every request from the window that would change
-content in author is blocked, including anything done by hand in it (see
-aem_screens.blocks_write). Closing the window ends the session.
+Optionally no saving: once signed in, every request from the window that
+would change content in author is blocked, including anything done by hand
+in it (see aem_screens.blocks_write). Off, the window is like the user's own
+browser: the tool itself still only opens pages and clicks dialog tabs.
+
+The sign-in can be remembered: the window then keeps its own browser profile
+(cookies and storage, in the git-ignored data folder), so the next sign-in
+goes through by itself while AEM and Adobe still accept the saved login.
+Otherwise closing the window ends the session.
 """
 
 from __future__ import annotations
 
 import queue
+import shutil
 import threading
+from pathlib import Path
 
 from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
@@ -29,6 +37,7 @@ from .aem_screens import (
     component_dialog_urls,
     properties_url,
 )
+from .utils import harden_file_permissions
 
 SIGNED_IN_NOTICE = """<!doctype html><title>AEM - signed in</title>
 <body style="font: 16px system-ui, sans-serif; margin: 3rem; max-width: 40rem; color: #222">
@@ -37,6 +46,14 @@ SIGNED_IN_NOTICE = """<!doctype html><title>AEM - signed in</title>
 closing it signs out.</p>
 <p>Nothing can be saved to AEM from this window: saving, publishing, deleting
 and workflows are blocked, so AEM shows an error if you try.</p></body>"""
+
+SIGNED_IN_NOTICE_OPEN = """<!doctype html><title>AEM - signed in</title>
+<body style="font: 16px system-ui, sans-serif; margin: 3rem; max-width: 40rem; color: #222">
+<h2>Signed in to AEM</h2>
+<p>Web Technology Inspector takes its AEM screenshots in this window. Keep it open;
+closing it signs out.</p>
+<p>Saving isn't blocked in this window (it's off in the app): it works like your
+own browser, so take care with anything you do here by hand.</p></body>"""
 
 _windows: dict[str, "AemWindow"] = {}
 _lock = threading.Lock()
@@ -47,10 +64,14 @@ class WindowClosed(RuntimeError):
 
 
 class AemWindow:
-    def __init__(self, author_base: str, *, show_browser: bool = True, prepare_context=None):
+    def __init__(self, author_base: str, *, show_browser: bool = True, prepare_context=None,
+                 block_saving: bool = True, profile_dir: Path | None = None, use_chrome: bool = False):
         self.author_base = author_base
         self._show_browser = show_browser
         self._prepare_context = prepare_context
+        self._block_saving = block_saving
+        self._profile_dir = profile_dir
+        self._use_chrome = use_chrome
         self._commands: queue.Queue = queue.Queue()
         self._ready = threading.Event()
         self._closed = threading.Event()
@@ -98,6 +119,10 @@ class AemWindow:
         if self._thread.is_alive():
             self._commands.put(("close", None, {}, threading.Event()))
 
+    def wait_closed(self, timeout: int = 15) -> None:
+        if self._thread.is_alive() and self._thread is not threading.current_thread():
+            self._thread.join(timeout)
+
     # --- worker thread ---------------------------------------------------------
 
     def _guard(self, context) -> None:
@@ -112,17 +137,39 @@ class AemWindow:
                 route.fallback()
         context.route("**/*", handle)
 
+    def _open(self, playwright):
+        """(browser or None, context): the installed Chrome if wanted and there,
+        else Playwright's Chromium; with the saved profile if remembering."""
+        options = {"headless": not self._show_browser}
+        channels = ["chrome", None] if self._use_chrome else [None]
+        for channel in channels:
+            launch = dict(options, **({"channel": channel} if channel else {}))
+            try:
+                if self._profile_dir:
+                    self._profile_dir.mkdir(parents=True, exist_ok=True)
+                    harden_file_permissions(self._profile_dir, mode=0o700)
+                    context = playwright.chromium.launch_persistent_context(
+                        str(self._profile_dir), viewport={"width": 1440, "height": 1000}, **launch)
+                    return None, context
+                browser = playwright.chromium.launch(**launch)
+                return browser, browser.new_context(viewport={"width": 1440, "height": 1000})
+            except PlaywrightError:
+                if channel is None:
+                    raise  # Chrome isn't installed: Chromium was the fallback
+
     def _run(self) -> None:
         try:
             with sync_playwright() as playwright:
-                browser = playwright.chromium.launch(headless=not self._show_browser)
+                browser, context = self._open(playwright)
                 try:
-                    context = browser.new_context(viewport={"width": 1440, "height": 1000})
                     if self._prepare_context:
                         self._prepare_context(context)
-                    page = context.new_page()
+                    page = context.pages[0] if context.pages else context.new_page()
                     page.goto(self.author_base.rstrip("/") + "/aem/start.html",
                               wait_until="domcontentloaded", timeout=60_000)
+                    if self._profile_dir:
+                        # A saved login AEM no longer accepts redirects to sign-in in script.
+                        page.wait_for_timeout(2000)
                     for _ in range(self._sign_in_timeout):
                         if page.is_closed():
                             raise SignInIncomplete("The AEM window was closed before signing in")
@@ -132,16 +179,17 @@ class AemWindow:
                     else:
                         raise SignInIncomplete(f"Not signed in within {self._sign_in_timeout // 60} minutes")
 
-                    # Signing in is done: from now on the window can't save.
-                    self._guard(context)
+                    if self._block_saving:
+                        # Signing in is done: from now on the window can't save.
+                        self._guard(context)
                     self.storage_state = context.storage_state()
                     # The start page isn't needed: say what the window is for
                     # instead. Same tab, so the sign-in stays.
-                    page.set_content(SIGNED_IN_NOTICE)
+                    page.set_content(SIGNED_IN_NOTICE if self._block_saving else SIGNED_IN_NOTICE_OPEN)
                     self._ready.set()
                     self._serve(page)
                 finally:
-                    browser.close()
+                    (browser or context).close()
         except BaseException as exc:  # noqa: BLE001 - handed to the waiting caller
             self._error = exc
             self._ready.set()
@@ -184,17 +232,30 @@ class AemWindow:
 # --- registry: one window per AEM environment, shared across reruns ---------------
 
 def open_window(environment_id: str, author_base: str, *, show_browser: bool = True,
-                prepare_context=None, timeout: int = 300) -> AemWindow:
+                prepare_context=None, timeout: int = 300, block_saving: bool = True,
+                profile_dir: Path | None = None, use_chrome: bool = False) -> AemWindow:
     """Open (or replace) the environment's window and wait for the sign-in."""
     with _lock:
         old = _windows.pop(environment_id, None)
     if old:
         old.close()
-    window = AemWindow(author_base, show_browser=show_browser, prepare_context=prepare_context)
+        old.wait_closed()  # a saved profile can only be open in one window
+    window = AemWindow(author_base, show_browser=show_browser, prepare_context=prepare_context,
+                       block_saving=block_saving, profile_dir=profile_dir, use_chrome=use_chrome)
     window.start(timeout)
     with _lock:
         _windows[environment_id] = window
     return window
+
+
+def forget_sign_in(environment_id: str, profile_dir: Path) -> None:
+    """Close the environment's window and delete its saved browser profile."""
+    with _lock:
+        window = _windows.pop(environment_id, None)
+    if window:
+        window.close()
+        window.wait_closed()
+    shutil.rmtree(profile_dir, ignore_errors=True)
 
 
 def get_window(environment_id: str) -> AemWindow | None:

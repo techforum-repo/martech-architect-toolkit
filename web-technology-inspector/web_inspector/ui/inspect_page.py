@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 import pandas as pd
 import streamlit as st
 
-from .. import aem_browser, aem_lookup, aem_mock, database, mock_scan, site_credentials
+from .. import aem_browser, aem_lookup, aem_mock, database, mock_scan, preferences, site_credentials
 from ..aem_screens import AemLoginRequired, capture_component_dialog, capture_page_properties
 from ..errors import friendly_error
 from ..config import settings
@@ -18,7 +18,8 @@ from ..investigation import analyze_target, environment_auth, lookup_aem_page, n
 from ..report import build_report, dot_graph, html_report, request_graph, requests_csv, stage_label
 from ..site_config import load, match
 from ..targets import available_targets
-from .shared import megabytes, show_error, sign_in_to_aem
+from .shared import (aem_profile_dir, block_saving, forget_aem_sign_in, megabytes, remember_sign_in,
+                     show_error, sign_in_to_aem)
 
 CONSENT_MODES = {
     "Leave the consent banner alone": "none",
@@ -123,6 +124,31 @@ def _aem_connection(mappings: list[dict], environments: list[dict], mock: bool) 
             col2.button("Sign in to AEM", type="primary", key="aem_sign_in"):
         if sign_in_to_aem(environment):
             _after_sign_in()
+            st.rerun()
+    _aem_window_settings(environment)
+
+
+def _aem_window_settings(environment: dict) -> None:
+    with st.expander("AEM window settings"):
+        remember = st.checkbox(
+            "Remember my AEM sign-in on this machine", value=remember_sign_in(),
+            help="The AEM window keeps its own browser profile (cookies and storage) in the app's "
+                 "data folder, so the next sign-in goes through by itself while AEM and Adobe still "
+                 "accept it. Applies from the next sign-in.")
+        if remember != remember_sign_in():
+            preferences.set("aem_remember_sign_in", remember)
+        block = st.checkbox(
+            "Block saving in the AEM window", value=block_saving(),
+            help="Refuses requests that would change AEM content (saving, publishing, deleting, "
+                 "workflows), also for anything done in the window by hand. AEM's UI may then fail "
+                 "to load some pages. Off, the window works like your own browser; the app itself "
+                 "only opens pages and clicks dialog tabs. Applies from the next sign-in.")
+        if block != block_saving():
+            preferences.set("aem_block_saving", block)
+        if aem_profile_dir(environment).exists() and st.button(
+                "Forget saved AEM sign-in", key="aem_forget_sign_in",
+                help="Closes the AEM window and deletes its saved browser profile for this environment."):
+            forget_aem_sign_in(environment)
             st.rerun()
 
 
@@ -433,8 +459,8 @@ def _properties_screenshot(result: dict, analysis: dict, target: str, key: tuple
     st.markdown("#### AEM screenshots")
     st.caption("For each match: Page Properties when the target is a page property, or that component's "
                "edit dialog when it's in a component, on the right tab with the field highlighted. "
-               "Nothing is saved: the browser blocks every request that would change content "
-               "(saving, publishing, deleting, workflows) and clicks only dialog tabs.")
+               "The app only opens pages and clicks dialog tabs, never Save"
+               + (" (and saving is blocked in the AEM window)." if block_saving() else "."))
     if not target.strip():
         st.info("Choose or type a target above.")
         return

@@ -3,6 +3,9 @@ from __future__ import annotations
 """State, navigation, and small widgets shared across every page in
 web_inspector/ui/*. Page-specific rendering stays in that page's own module."""
 
+import re
+from pathlib import Path
+
 import streamlit as st
 
 from .. import VERSION, aem_browser, aem_lookup, aem_mock, preferences
@@ -75,16 +78,40 @@ def signed_in(environment: dict) -> bool:
     return environment["id"] in st.session_state["aem_ui_sessions"]
 
 
+def block_saving() -> bool:
+    """Whether the AEM window blocks saving (off by default: it's the user's own login)."""
+    return bool(preferences.get("aem_block_saving", False))
+
+
+def remember_sign_in() -> bool:
+    return bool(preferences.get("aem_remember_sign_in", True))
+
+
+def aem_profile_dir(environment: dict) -> Path:
+    """The AEM window's saved browser profile for an environment (git-ignored data folder)."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", environment["id"])
+    return settings.data_path / "aem-browser" / safe
+
+
 def sign_in_to_aem(environment: dict) -> bool:
     """Open an AEM window, wait for the user to sign in, and keep it open for screenshots.
 
-    Its login cookies are also kept in memory for the AEM lookups."""
+    Its login cookies are also kept in memory for the AEM lookups. With
+    "remember" on, the window's profile is saved, so a later sign-in goes
+    through by itself while AEM still accepts it."""
     mock = aem_lookup.is_mock(environment)
-    with st.spinner("An AEM window is open: sign in there. Keep it open (it's used for screenshots)."):
+    remember = remember_sign_in() and not mock
+    message = ("Signing in to AEM with your saved login; if AEM asks, sign in in the AEM window."
+               if remember and aem_profile_dir(environment).exists() else
+               "An AEM window is open: sign in there. Keep it open (it's used for screenshots).")
+    with st.spinner(message):
         try:
             window = aem_browser.open_window(environment["id"], environment["author_base"],
                                              show_browser=not mock,
-                                             prepare_context=aem_mock.serve_author_ui if mock else None)
+                                             prepare_context=aem_mock.serve_author_ui if mock else None,
+                                             block_saving=block_saving(),
+                                             profile_dir=aem_profile_dir(environment) if remember else None,
+                                             use_chrome=not mock)
             state = window.storage_state
         except SignInIncomplete as exc:
             show_error({"title": "Not signed in", "reasons": [str(exc)]})
@@ -95,6 +122,12 @@ def sign_in_to_aem(environment: dict) -> bool:
             return False
     st.session_state["aem_ui_sessions"][environment["id"]] = state
     return True
+
+
+def forget_aem_sign_in(environment: dict) -> None:
+    """Sign out and delete the saved login for the environment."""
+    st.session_state["aem_ui_sessions"].pop(environment["id"], None)
+    aem_browser.forget_sign_in(environment["id"], aem_profile_dir(environment))
 
 
 def sign_out_of_aem(environment: dict) -> None:

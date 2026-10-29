@@ -48,14 +48,20 @@ On the **Settings** page:
 3. Click **Sign in to AEM** for the environment. An AEM window opens; sign
    in as usual (Adobe SSO) and **keep that window open**: AEM's UI only trusts
    the browser you signed in with, so screenshots are taken in it. Once you're
-   signed in, nothing can be saved to AEM from the window: requests that
-   would change content (POSTs to repository paths such as `/content` or
-   `/conf`, `/bin/` servlets like publish, and any PUT or DELETE) are
-   blocked, also for anything done in it by hand. Other requests AEM's UI
-   makes while loading are allowed, and each screenshot lists what was
-   blocked and allowed (rule: `blocks_write` in `web_inspector/aem_screens.py`). The sign-in is also used for every AEM
-   lookup and is kept in memory for the session only; closing the window or
-   restarting the app means signing in again. A Local Development Token can
+   signed in, the app only opens pages and clicks dialog tabs in it, never
+   Save. The window uses your installed Chrome when there is one.
+   Under **AEM window settings**:
+   - **Remember my AEM sign-in on this machine** (on by default): the
+     window keeps its own browser profile in `data/aem-browser/` (git-ignored),
+     so the next **Sign in to AEM** goes through by itself while AEM and
+     Adobe still accept the login. **Forget saved AEM sign-in** deletes it.
+   - **Block saving in the AEM window** (off by default): refuses requests
+     that would change content (POSTs to repository paths such as `/content`
+     or `/conf`, `/bin/` servlets like publish, any PUT or DELETE), also for
+     anything done in the window by hand; each screenshot then lists what was
+     blocked. AEM's UI may fail to load some pages with it on.
+
+   The sign-in is also used for every AEM lookup. A Local Development Token can
    be used instead (optional, under the environment) for lookups and for
    authors that accept it for their UI.
 

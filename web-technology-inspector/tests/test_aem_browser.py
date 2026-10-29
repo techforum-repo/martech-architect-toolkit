@@ -183,3 +183,41 @@ class AemWindowNoticeTests(unittest.TestCase):
         # The dialog still sees the tab's sign-in after the notice replaced the start page.
         result = aem_browser.capture_page_properties(window, "/content/site/en", "tracking.example.com")
         self.assertEqual([f["label"] for f in result["fields"]], ["Analytics domain"])
+
+
+@unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
+class AemWindowOptionTests(unittest.TestCase):
+    def test_saving_allowed_when_blocking_is_off(self):
+        seen = []
+        window = aem_browser.open_window("env_open", AUTHOR, show_browser=False,
+                                         prepare_context=strict_author(seen), timeout=20, block_saving=False)
+        self.addCleanup(aem_browser.close_window, "env_open")
+        result = aem_browser.capture_page_properties(window, "/content/site/en", "tracking.example.com")
+        self.assertEqual(result["blocked_writes"], [])
+        self.assertIn(("POST", AUTHOR + "/libs/granite/csrf/token.json"), seen)
+
+    def test_remembered_sign_in_is_reused(self):
+        import tempfile
+        from pathlib import Path
+        profile = Path(tempfile.mkdtemp()) / "env_saved"
+        sent_cookie = []
+
+        def prepare(context):
+            def start(route):
+                cookie = route.request.headers.get("cookie", "")
+                sent_cookie.append("login-token=t" in cookie)
+                # A lasting cookie, as Adobe's sign-in cookies are.
+                route.fulfill(status=200, content_type="text/html",
+                              headers={"Set-Cookie": "login-token=t; Path=/; Secure; Max-Age=3600"},
+                              body="Start")
+            context.route(AUTHOR + "/aem/start.html", start)
+
+        for _ in range(2):
+            window = aem_browser.open_window("env_saved", AUTHOR, show_browser=False, prepare_context=prepare,
+                                             timeout=20, profile_dir=profile)
+            aem_browser.close_window("env_saved")
+            window.wait_closed()  # the profile is written as the browser closes
+        self.assertEqual(sent_cookie, [False, True])  # the second window was already signed in
+
+        aem_browser.forget_sign_in("env_saved", profile)
+        self.assertFalse(profile.exists())
