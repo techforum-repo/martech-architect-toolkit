@@ -171,6 +171,26 @@ class ComponentDialogCaptureTests(unittest.TestCase):
         self.assertEqual([f["label"] for f in result["fields"]], ["html"])
         self.assertIn("/mnt/override/apps/", result["url"])
 
+    def test_falls_back_to_libs_when_apps_answers_500(self):
+        def apps_error(context):
+            def handle(route):
+                url = route.request.url
+                if "/mnt/override/apps/" in url:
+                    route.fulfill(status=500, body="Internal Server Error")
+                elif "/mnt/override/libs/" in url:
+                    route.fulfill(status=200, content_type="text/html", body=(
+                        "<div class='coral-Form-fieldwrapper'><label>HTML</label>"
+                        "<input name='./html' value='https://tracking.example.com/t.js'></div>"))
+                else:
+                    route.fulfill(status=200, body=b"")
+            context.route("**/*", handle)
+        result = capture_component_dialog(AUTHOR, "/content/site/en/jcr:content/root/embed",
+                                          "core/wcm/components/embed/v2/embed", "tracking.example.com", TOKEN,
+                                          prepare_context=apps_error)
+        self.assertEqual([a["status"] for a in result["attempts"]], [500, 200])
+        self.assertIn("/mnt/override/libs/", result["url"])
+        self.assertEqual([f["label"] for f in result["fields"]], ["HTML"])
+
     def test_falls_back_to_libs_when_apps_has_no_dialog(self):
         def libs_only(context):
             def handle(route):

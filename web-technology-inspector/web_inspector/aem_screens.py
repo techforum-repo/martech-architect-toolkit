@@ -237,10 +237,12 @@ def _capture_in_page(page, author_base: str, urls: list[str], term: str, blocked
                      timeout: int) -> dict:
     """In an already open tab: open the first of urls that renders, then
     screenshot each field containing term."""
-    url, response = urls[0], None
+    url, response, attempts = urls[0], None, []
     for url in urls:
         response = page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
-        if not response or response.status != 404:
+        attempts.append({"url": url, "status": response.status if response else None})
+        # A wrong /apps vs /libs guess can answer 404 or 500: try the next address.
+        if not response or response.status < 400:
             break
     try:
         page.wait_for_load_state("networkidle", timeout=15_000)
@@ -271,6 +273,7 @@ def _capture_in_page(page, author_base: str, urls: list[str], term: str, blocked
     return {
         "url": url,
         "status": response.status if response else None,
+        "attempts": attempts,
         "fields": captured,
         "page_image": None if captured else page.screenshot(full_page=False, animations="disabled"),
         "blocked_writes": list(blocked),

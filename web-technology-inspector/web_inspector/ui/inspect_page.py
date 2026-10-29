@@ -380,8 +380,13 @@ def _show_captures(captures: dict, target: str) -> None:
         if item.get("sign_in"):
             continue
         shot = item["result"]
-        if shot.get("status") == 404:
-            st.caption("AEM didn't find a dialog for this component.")
+        status = shot.get("status") or 0
+        st.markdown(f"[Open in AEM]({shot['url']}) · " + " · ".join(
+            f"`{a['url'].split('/mnt/', 1)[-1][:90]}` → {a['status']}" for a in shot.get("attempts", [])))
+        if status >= 400:
+            st.caption(f"AEM answered {status} for every address tried. Use **Open in AEM** to check the "
+                       "address in your own browser: if it fails there too, the address form doesn't suit this "
+                       "AEM; if it works there, tell the developer.")
         elif not shot["fields"]:
             st.caption(f"No field in this dialog shows “{target}” (it may be in a field the dialog doesn't "
                        "display). The dialog as opened:")
