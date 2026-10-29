@@ -112,6 +112,19 @@ def investigate(scan_result: dict, target: str) -> list[dict]:
         finding.update(requests=len(items), evidence=examples)
         findings.append(finding)
 
+    if not findings and " " in target:
+        # Text, not a domain or URL: it's shown on the page, not loaded by a request.
+        findings.append({
+            "source": "Page text",
+            "method": "Text isn't loaded by a request or script",
+            "confidence": "n/a",
+            "requests": 0,
+            "evidence": [],
+            "explanation": (
+                "This section traces how requests and scripts load. Text shown on the page comes "
+                "from the content itself: Search AEM below finds the component or page that holds it."
+            ),
+        })
     if not findings:
         findings.append({
             "source": "Not found",

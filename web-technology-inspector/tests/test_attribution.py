@@ -31,3 +31,11 @@ class AttributionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PageTextTests(unittest.TestCase):
+    def test_text_target_points_to_search_aem(self):
+        from web_inspector.attribution import investigate
+        [finding] = investigate({"requests": [], "scripts": [], "inline_scripts": []}, "Featured stories..")
+        self.assertEqual(finding["source"], "Page text")
+        self.assertIn("Search AEM", finding["explanation"])
