@@ -196,21 +196,37 @@ def _dialog(page_path, props=None, heading="Page Properties"):
 
 # Page editor stub: AEM's editor API, as much of it as the screenshots use.
 EDITOR_SCRIPT = """
+// Shaped like AEM's documented editor API: the components are a store (not
+// an array), the wrench is ToolbarActions.CONFIGURE, DialogFrame knows the
+// open dialog. Components load a moment after the page, as in AEM.
+const editables = DIALOGS.map(d => ({path: d.path}));
+let root = null, floating = null;
+setTimeout(() => { root = {path: 'root'}; }, 300);
+const openDialog = editable => {
+  if (Granite.author.layerManager.layer !== 'Edit') throw new Error('not in Edit layer');
+  const d = DIALOGS.find(x => x.path === editable.path);
+  document.body.insertAdjacentHTML('beforeend', '<div class="cq-dialog-floating" ' +
+    'style="position:fixed;inset:40px;background:#fff;border:1px solid #999;padding:16px;overflow:auto">'
+    + d.html + '</div>');
+  floating = document.querySelector('.cq-dialog-floating:last-child');
+};
 window.Granite = {author: {
-  editables: Object.assign(DIALOGS.map(d => ({path: d.path})),
-                           {find(path) { return this.filter(e => e.path === path); }}),
+  editables: {
+    getRoot() { return root; },
+    getChildren() { return root ? editables : []; },
+    find(path) { return root ? editables.filter(e => e.path === path) : []; },
+  },
   layerManager: {layer: 'Preview', getCurrentLayerName() { return this.layer; },
                  activateLayer(name) { this.layer = name; }},
-  edit: {Dialog: function (editable) { this.editable = editable; }},
-  DialogFrame: {openDialog(dialog) {
-    if (Granite.author.layerManager.layer !== 'Edit') throw new Error('not in Edit layer');
-    const d = DIALOGS.find(x => x.path === dialog.editable.path);
-    document.body.insertAdjacentHTML('beforeend', '<coral-dialog class="is-open" ' +
-      'style="display:block;position:fixed;inset:40px;background:#fff;border:1px solid #999;padding:16px;overflow:auto">'
-      + d.html + '</coral-dialog>');
-  }},
+  edit: {Dialog: function (editable) { this.editable = editable; },
+         ToolbarActions: {CONFIGURE: {execute: openDialog}}},
+  DialogFrame: {
+    openDialog(dialog) { openDialog(dialog.editable); },
+    isOpened() { return !!floating; },
+    get currentFloatingDialog() { return floating && {jquery: '3', 0: floating}; },
+  },
 }};
-function show(i) { document.querySelectorAll('coral-dialog coral-panel')
+function show(i) { document.querySelectorAll('.cq-dialog-floating coral-panel')
   .forEach((p, n) => p.style.display = n === i ? '' : 'none'); }
 """
 

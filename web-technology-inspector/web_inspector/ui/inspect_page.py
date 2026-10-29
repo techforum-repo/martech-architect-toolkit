@@ -340,7 +340,8 @@ def _screenshot_targets(result: dict, analysis: dict) -> list[dict]:
                     "kind": "component", "path": node, "resource_type": resource_type,
                     "title": f"{resource_type.rsplit('/', 1)[-1]} component at {node} "
                              f"({_why(scanned, node, entry['scope'])})"})
-    return list(targets.values())
+    # Page Properties first: quick, and a component's dialog takes the editor to load.
+    return sorted(targets.values(), key=lambda t: t["kind"] != "page")
 
 
 def _capture(result: dict, target_item: dict, term: str) -> dict:
@@ -369,7 +370,8 @@ def _capture(result: dict, target_item: dict, term: str) -> dict:
     except DialogNotOpened as exc:
         page_path = target_item["path"].split("/jcr:content", 1)[0]
         return {"item": target_item, "error": {"title": "The component's dialog didn't open", "reasons": [
-            str(exc), f"Check it in AEM: {editor_url(environment['author_base'], page_path)}"]}}
+            str(exc), f"Check it in AEM: {editor_url(environment['author_base'], page_path)}"]},
+            "editor": {"step": exc.step, "state": exc.state, "image": exc.image}}
     except AemLoginRequired as exc:
         if not exc.sign_in_page:
             return {"item": target_item, "error": {"title": "The dialog opened a different page", "reasons": [
@@ -411,6 +413,22 @@ def _show_captures(captures: dict, target: str) -> None:
         st.markdown(f"**{item['item']['title']}**")
         if item.get("error"):
             show_error({"title": "Screenshot failed: " + item["error"]["title"], "reasons": item["error"]["reasons"]})
+            editor = item.get("editor")
+            if editor:
+                with st.expander(f"What the page editor had (stopped at: {editor['step']})"):
+                    state = editor["state"]
+                    if state:
+                        st.markdown(
+                            f"- Editor API: **{'yes' if state.get('api') else 'no'}**, wrench action: "
+                            f"**{'yes' if state.get('dialog_api') else 'no'}**, layer: {state.get('layer') or 'unknown'}, "
+                            f"dialog mode: {state.get('dialog_mode') or 'unknown'}, "
+                            f"editor says a dialog is open: **{'yes' if state.get('dialog_open') else 'no'}**\n"
+                            f"- Components known: {state.get('editables')}, overlays: {state.get('overlays')}\n"
+                            f"- Dialogs on the page: {', '.join(state.get('dialogs') or []) or 'none'}")
+                        st.caption("Component paths in the editor, closest to the one searched first:")
+                        st.code("\n".join(state.get("closest_paths") or []) or "(none)", language=None)
+                    if editor.get("image"):
+                        st.image(editor["image"], caption="The page editor when it stopped", width="stretch")
             continue
         if item.get("sign_in"):
             continue

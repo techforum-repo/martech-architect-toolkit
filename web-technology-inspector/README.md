@@ -137,9 +137,12 @@ configured, for up to six matches:
 - **A component property** (the match is on a component node, also inside
   experience fragments): that component instance's edit dialog, opened as an
   author would: the page (or experience fragment) in the page editor, then
-  that component's dialog, through the editor's own API (as its wrench
-  button does), else by selecting the component and clicking the wrench.
-  Only fields inside that dialog count as matches.
+  that component's dialog with the editor's documented API (`Granite.author`:
+  `editables.find(path)`, then `edit.ToolbarActions.CONFIGURE`, the wrench
+  button's action), else by selecting the component and clicking the wrench.
+  Only fields inside that dialog count as matches; a dialog the editor opens
+  as a page of its own (its `dialogMode`) works too. If the dialog doesn't
+  open, the result says at which step and what the editor had.
 
 Each screenshot shows the dialog on the tab that holds the field, with the
 field highlighted. Custom and nested tabs are followed: every tab on the way

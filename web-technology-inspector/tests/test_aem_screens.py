@@ -48,7 +48,9 @@ EDITOR = """<!doctype html><html><body>
   function show(i) { document.querySelectorAll('coral-dialog coral-panel').forEach((p, n) => p.style.display = n === i ? '' : 'none'); }
   setTimeout(() => {  // the editor loads its components after the page
     window.Granite = {author: {
-      editables: Object.assign([{path: '%(path)s'}], {find(p) { return this.filter(e => e.path === p); }}),
+      // A store, not an array, as in AEM (no length).
+      editables: {getRoot() { return {path: 'root'}; }, getChildren() { return [{path: '%(path)s'}]; },
+                  find(p) { return p === '%(path)s' ? [{path: p}] : []; }},
       layerManager: {layer: 'Preview', getCurrentLayerName() { return this.layer; }, activateLayer(n) { this.layer = n; }},
       %(api)s
     }};
@@ -56,8 +58,13 @@ EDITOR = """<!doctype html><html><body>
   %(wrench)s
 </script></body></html>"""
 
-EDITOR_API = """edit: {Dialog: function (e) { this.editable = e; }},
-      DialogFrame: {openDialog(d) { if (Granite.author.layerManager.layer !== 'Edit') throw 'preview'; open(); }},"""
+EDITOR_API = """edit: {ToolbarActions: {CONFIGURE: {execute(e) {
+        if (Granite.author.layerManager.layer !== 'Edit') throw 'preview'; open(); }}}},
+      DialogFrame: {isOpened() { return !!document.querySelector('coral-dialog'); }},"""
+
+# The editor's dialogMode "newpage": the dialog opens as a page of its own.
+EDITOR_NEWPAGE = """edit: {ToolbarActions: {CONFIGURE: {execute(e) {
+        location.href = '/mnt/override/apps/site/embed/_cq_dialog.html' + e.path; }}}},"""
 
 # No usable editor API: select the component, then the wrench, as an author would.
 EDITOR_WRENCH = """document.querySelector('.cq-Overlay').addEventListener('click', () => {
@@ -183,6 +190,8 @@ class ComponentDialogTests(unittest.TestCase):
         def serve(route):
             if route.request.url.startswith(AUTHOR + "/editor.html/content/site/en.html"):
                 html(editor)(route)
+            elif "/_cq_dialog.html" in route.request.url:
+                html(DIALOG)(route)
             else:
                 route.fulfill(status=404, body="")
         window = aem_browser.open_window("env_editor", AUTHOR, show_browser=False,
@@ -198,6 +207,13 @@ class ComponentDialogTests(unittest.TestCase):
         self.assertTrue(field["visible"])
         self.assertEqual(result["url"], AUTHOR + "/editor.html/content/site/en.html")
 
+    def test_dialog_opened_as_a_page_of_its_own(self):
+        window = self.window(EDITOR % {"path": EMBED, "api": EDITOR_NEWPAGE, "wrench": ""})
+        result = aem_browser.capture_component_dialog(window, EMBED, "tracking.example.com")
+        [field] = result["fields"]
+        self.assertEqual(field["tabs"], ["Advanced"])
+        self.assertIn("/_cq_dialog.html", result["url"])
+
     def test_dialog_opened_with_the_wrench_without_the_api(self):
         window = self.window(EDITOR % {"path": EMBED, "api": "", "wrench": EDITOR_WRENCH})
         [field] = aem_browser.capture_component_dialog(window, EMBED, "tracking.example.com")["fields"]
@@ -209,6 +225,10 @@ class ComponentDialogTests(unittest.TestCase):
         with self.assertRaises(DialogNotOpened) as raised:
             aem_browser.capture_component_dialog(window, EMBED, "tracking.example.com")
         self.assertIn("no editable component", str(raised.exception))
+        # It says what the editor had, to compare with the path searched.
+        self.assertEqual(raised.exception.step, "finding the component")
+        self.assertIn("/content/site/en/jcr:content/other", raised.exception.state["closest_paths"])
+        self.assertTrue(raised.exception.image.startswith(b"\x89PNG"))
 
 
 @unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")

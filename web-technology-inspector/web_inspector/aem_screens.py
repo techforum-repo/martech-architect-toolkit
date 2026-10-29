@@ -18,6 +18,8 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 FIELD_WAIT_SECONDS = 10
+EDITOR_WAIT_SECONDS = 45
+DIALOG_WAIT_SECONDS = 20
 PROPERTIES_PATH = "/mnt/overlay/wcm/core/content/sites/properties.html"
 
 # Finds form fields whose value contains the term, including fields on
@@ -160,27 +162,82 @@ NO_MATCH_SCRIPT = """([term, root]) => {
     };
 }"""
 
-# The page editor: its open component dialog, and whether its editables are loaded.
-EDITOR_DIALOG = "coral-dialog.is-open, coral-dialog[open], .cq-Dialog.is-open"
-EDITOR_READY_SCRIPT = """() => !!(window.Granite && Granite.author && Granite.author.editables
-                                  && Granite.author.editables.length)"""
+# The page editor, through its documented API (Granite.author, "Editor Core"
+# in Adobe's AEM JSDoc). Its components are a store, not an array:
+# editables.find(path), getRoot(), getChildren(root, true).
 
-# Opens a component's edit dialog the way the editor's wrench button does,
-# through AEM's own editor API: "opened", "not-found" or "no-api".
-OPEN_DIALOG_SCRIPT = """path => {
-    const author = Granite.author;
-    try {  // the Edit layer has the dialogs (the editor may open in Preview)
-        if (author.layerManager.getCurrentLayerName() !== 'Edit') author.layerManager.activateLayer('Edit');
-    } catch (e) {}
-    let editable = null;
-    try { const found = author.editables.find(path); editable = Array.isArray(found) ? found[0] : found; } catch (e) {}
-    if (!editable || editable.path !== path) {
-        try { editable = [...author.editables].find(e => e && e.path === path) || null; } catch (e) { editable = null; }
+# Dialog markup, for when the API doesn't hand over the dialog's element.
+EDITOR_DIALOG = "coral-dialog.is-open, coral-dialog[open], .cq-dialog-floating, .cq-Dialog.is-open"
+# The open dialog once found: matching stays inside it.
+DIALOG_ROOT = "[data-wti-dialog]"
+
+# "found" once the component at path is loaded, "loaded" when the editor's
+# components are but not that one, "" while loading. Also switches to the
+# Edit layer, which has the dialogs (the editor may open in Preview).
+EDITOR_READY_SCRIPT = """path => {
+    try {
+        const author = Granite.author, store = author.editables;
+        if (!store.getRoot()) return '';
+        try {
+            if (author.layerManager.getCurrentLayerName() !== 'Edit') author.layerManager.activateLayer('Edit');
+        } catch (e) {}
+        return store.find(path).length ? 'found' : 'loaded';
+    } catch (e) {
+        return document.querySelector(`.cq-Overlay[data-path="${path}"]`) ? 'found' : '';
     }
+}"""
+
+# Opens the component's dialog as its wrench button does (ToolbarActions.CONFIGURE),
+# else as that action does it (DialogFrame.openDialog of an edit.Dialog).
+OPEN_DIALOG_SCRIPT = """path => {
+    let author, editable;
+    try { author = Granite.author; editable = author.editables.find(path)[0]; } catch (e) { return 'no-api'; }
     if (!editable) return 'not-found';
-    try { author.DialogFrame.openDialog(new author.edit.Dialog(editable)); return 'opened'; } catch (e) {}
-    try { author.edit.EditableActions.CONFIGURE.execute(editable); return 'opened'; } catch (e) {}
+    try { author.edit.ToolbarActions.CONFIGURE.execute(editable); return 'wrench action'; } catch (e) {}
+    try { author.DialogFrame.openDialog(new author.edit.Dialog(editable)); return 'dialog frame'; } catch (e) {}
     return 'no-api';
+}"""
+
+# Marks the open dialog's element (DIALOG_ROOT): "inline" when there is one,
+# "opened" when the editor says a dialog is open but its element isn't found.
+DIALOG_OPEN_SCRIPT = """selector => {
+    let frame = null, element = null;
+    try { frame = Granite.author.DialogFrame; } catch (e) {}
+    try {
+        const current = frame && frame.currentFloatingDialog;
+        element = current && (current.jquery ? current[0] : current) || null;
+    } catch (e) {}
+    if (!element) element = document.querySelector(selector);
+    if (element) { element.setAttribute('data-wti-dialog', ''); return 'inline'; }
+    try { if (frame && frame.isOpened()) return 'opened'; } catch (e) {}
+    return '';
+}"""
+
+# What the editor has, for when the dialog didn't open.
+EDITOR_STATE_SCRIPT = """path => {
+    const author = window.Granite && Granite.author;
+    let paths = [], count = null;
+    try {
+        const store = author.editables, root = store.getRoot();
+        const all = [root, ...store.getChildren(root, true)].filter(Boolean);
+        paths = all.map(e => e.path).filter(Boolean);
+        count = all.length;
+    } catch (e) {}
+    if (!paths.length) paths = [...document.querySelectorAll('.cq-Overlay[data-path]')].map(o => o.dataset.path);
+    const common = p => { let i = 0; while (i < p.length && p[i] === path[i]) i++; return i; };
+    paths = [...new Set(paths)].sort((a, b) => common(b) - common(a)).slice(0, 8);
+    const safe = f => { try { return f(); } catch (e) { return null; } };
+    return {
+        api: !!author, dialog_api: !!safe(() => author.edit.ToolbarActions.CONFIGURE),
+        layer: safe(() => author.layerManager.getCurrentLayerName()) || '',
+        dialog_mode: safe(() => author.DialogFrame.dialogMode) || '',
+        dialog_open: !!safe(() => author.DialogFrame.isOpened()),
+        editables: count,
+        overlays: document.querySelectorAll('.cq-Overlay[data-path]').length,
+        closest_paths: paths,
+        dialogs: [...document.querySelectorAll('coral-dialog, .cq-Dialog, .cq-dialog')].map(d =>
+            d.tagName.toLowerCase() + '.' + [...d.classList].join('.') + (d.hasAttribute('open') ? '[open]' : '')),
+    };
 }"""
 
 # The tabs showing now, for the details.
@@ -330,7 +387,26 @@ def _open_tabs(page, marker: str, depth: int) -> None:
 
 
 class DialogNotOpened(RuntimeError):
-    """The page editor didn't open the component's dialog."""
+    """The page editor didn't open the component's dialog.
+
+    step: where it stopped; state: what the editor had (EDITOR_STATE_SCRIPT);
+    image: the editor as it was."""
+
+    def __init__(self, message: str, *, step: str = "", state: dict | None = None, image: bytes | None = None):
+        super().__init__(message)
+        self.step, self.state, self.image = step, state or {}, image
+
+
+def _not_opened(page, message: str, step: str, node_path: str) -> DialogNotOpened:
+    try:
+        state = page.evaluate(EDITOR_STATE_SCRIPT, node_path)
+    except PlaywrightError:
+        state = {}
+    try:
+        image = page.screenshot(full_page=False, animations="disabled")
+    except PlaywrightError:
+        image = None
+    return DialogNotOpened(message, step=step, state=state, image=image)
 
 
 def _settle(page) -> None:
@@ -384,28 +460,59 @@ def _capture_in_editor(page, author_base: str, node_path: str, term: str, blocke
     attempts = [{"url": url, "status": response.status if response else None}]
     _settle(page)
     _require_author(page, author_base, blocked, "page editor")
-    try:
-        page.wait_for_function(EDITOR_READY_SCRIPT, timeout=timeout * 1000)
-    except PlaywrightTimeout as exc:
-        raise DialogNotOpened(f"The page editor for {page_path} didn't finish loading its components") from exc
+    status = _poll(page, EDITOR_READY_SCRIPT, node_path, EDITOR_WAIT_SECONDS, "found")
+    if status == "loaded":
+        raise _not_opened(page, f"The page editor of {page_path} has no editable component at {node_path} "
+                          "(it may come from the template or a locked structure).", "finding the component",
+                          node_path)
+    if status != "found":
+        raise _not_opened(page, f"The page editor for {page_path} didn't finish loading its components "
+                          f"within {EDITOR_WAIT_SECONDS} seconds", "editor loading", node_path)
 
-    opened = page.evaluate(OPEN_DIALOG_SCRIPT, node_path)
-    if opened == "not-found":
-        raise DialogNotOpened(f"The page editor of {page_path} has no editable component at {node_path} "
-                              "(it may come from the template or a locked structure).")
-    if opened == "no-api":
+    try:
+        how = page.evaluate(OPEN_DIALOG_SCRIPT, node_path)
+    except PlaywrightError:
+        how = "no-api"
+    if how == "no-api":
         # As an author would: select the component, then the wrench (Configure).
+        how = "wrench click"
         try:
             page.locator(f'.cq-Overlay[data-path="{node_path}"]').first.click(timeout=10_000)
             page.locator('button[data-action="CONFIGURE"]').first.click(timeout=10_000)
         except PlaywrightError as exc:
-            raise DialogNotOpened(f"Couldn't open the dialog of {node_path} in the page editor") from exc
-    try:
-        page.wait_for_selector(EDITOR_DIALOG, state="visible", timeout=30_000)
-    except PlaywrightTimeout as exc:
-        raise DialogNotOpened(f"The dialog of {node_path} didn't open in the page editor") from exc
+            raise _not_opened(page, f"Couldn't select {node_path} and click its wrench in the page editor",
+                              "clicking the component", node_path) from exc
+
+    opened = _poll(page, DIALOG_OPEN_SCRIPT, EDITOR_DIALOG, DIALOG_WAIT_SECONDS, "inline", editor=url)
+    if opened == "newpage":
+        # The editor's dialogMode opened it as a page of its own: match in that page.
+        _settle(page)
+        return _capture_matches(page, term, page.url, None, attempts, blocked)
+    if opened != "inline":
+        raise _not_opened(page, f"The dialog of {node_path} didn't show within {DIALOG_WAIT_SECONDS} seconds "
+                          f"(opened through the {how}"
+                          + ("; the editor says a dialog is open, but its element wasn't found)" if opened else ")"),
+                          "waiting for the dialog", node_path)
     page.wait_for_timeout(500)  # the dialog's opening animation
-    return _capture_matches(page, term, url, attempts[0]["status"], attempts, blocked, root=EDITOR_DIALOG)
+    return _capture_matches(page, term, url, attempts[0]["status"], attempts, blocked, root=DIALOG_ROOT)
+
+
+def _poll(page, script: str, arg, seconds: int, wanted: str, *, editor: str | None = None) -> str:
+    """Run script every half second until it returns wanted, for up to
+    seconds; return its last answer. With editor, "newpage" when the tab
+    left the editor (a dialog opened as a page of its own)."""
+    last = ""
+    for _ in range(seconds * 2):
+        if editor and not page.url.split("?")[0].startswith(editor):
+            return "newpage"
+        try:
+            last = page.evaluate(script, arg) or ""
+        except PlaywrightError:
+            last = ""  # navigating meanwhile
+        if last == wanted:
+            return last
+        page.wait_for_timeout(500)
+    return last
 
 
 def _capture_matches(page, term: str, url: str, status, attempts: list[dict], blocked: list[str],
