@@ -16,7 +16,9 @@ browser: the tool itself still only opens pages and clicks dialog tabs.
 The sign-in can be remembered: the window then keeps its own browser profile
 (cookies and storage, in the git-ignored data folder), so the next sign-in
 goes through by itself while AEM and Adobe still accept the saved login.
-Otherwise closing the window ends the session.
+Chrome then also runs as its own program (chrome_process), so stopping the
+app leaves it open and signed in, and the next start connects to the same
+tab again. Otherwise closing the window ends the session.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from __future__ import annotations
 import queue
 import shutil
 import threading
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -38,6 +41,7 @@ from .aem_screens import (
     component_dialog_urls,
     properties_url,
 )
+from . import chrome_process
 from .utils import harden_file_permissions
 
 SIGNED_IN_NOTICE = """<!doctype html><title>AEM - signed in</title>
@@ -47,6 +51,9 @@ SIGNED_IN_NOTICE = """<!doctype html><title>AEM - signed in</title>
 closing it signs out.</p>
 <p>Nothing can be saved to AEM from this window: saving, publishing, deleting
 and workflows are blocked, so AEM shows an error if you try.</p></body>"""
+
+STAYS_OPEN = ("<p>It stays open when the app stops, and the app connects to it again on its next "
+              "start, so you stay signed in.</p>")
 
 SIGNED_IN_NOTICE_OPEN = """<!doctype html><title>AEM - signed in</title>
 <body style="font: 16px system-ui, sans-serif; margin: 3rem; max-width: 40rem; color: #222">
@@ -58,6 +65,13 @@ own browser, so take care with anything you do here by hand.</p></body>"""
 
 _windows: dict[str, "AemWindow"] = {}
 _lock = threading.Lock()
+
+
+def _close_chrome(browser) -> None:
+    try:
+        browser.new_browser_cdp_session().send("Browser.close")
+    except PlaywrightError:
+        pass  # already closed
 
 
 class WindowClosed(RuntimeError):
@@ -73,6 +87,10 @@ class AemWindow:
         self._block_saving = block_saving
         self._profile_dir = profile_dir
         self._use_chrome = use_chrome
+        # With a saved profile, Chrome runs as its own program and outlives
+        # the app; it's only closed on purpose (sign out, forget the sign-in).
+        self.detached = profile_dir is not None
+        self._close_browser = False
         self._commands: queue.Queue = queue.Queue()
         self._ready = threading.Event()
         self._closed = threading.Event()
@@ -116,7 +134,9 @@ class AemWindow:
             raise box["error"]
         return box["result"]
 
-    def close(self) -> None:
+    def close(self, *, close_browser: bool = True) -> None:
+        """Stop the window; close_browser=False leaves a detached Chrome open."""
+        self._close_browser = close_browser
         self._closed.set()
         if self._thread.is_alive():
             self._commands.put(("close", None, {}, threading.Event()))
@@ -139,9 +159,37 @@ class AemWindow:
                 route.fallback()
         context.route("**/*", handle)
 
+    def _attach(self, playwright):
+        """(browser, context) of the profile's own Chrome: the one already
+        running (from an earlier app run), else a newly started one."""
+        self._profile_dir.mkdir(parents=True, exist_ok=True)
+        harden_file_permissions(self._profile_dir, mode=0o700)
+        port = chrome_process.running_port(self._profile_dir)
+        if not port:
+            installed = self._use_chrome and chrome_process.installed_chrome()
+            port = chrome_process.launch(installed or playwright.chromium.executable_path,
+                                         self._profile_dir, "about:blank",
+                                         headless=not self._show_browser, sandbox=bool(installed))
+        browser = playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+        return browser, browser.contexts[0]
+
+    def _tab(self, context):
+        """The tab to use: in a reused Chrome the one signed in before (AEM's
+        sign-in lives in that tab), else the first or a new one."""
+        author = self.author_base.lower().rstrip("/")
+        for page in context.pages:
+            try:
+                if page.url.lower().startswith(author) or page.title() == "AEM - signed in":
+                    return page
+            except PlaywrightError:
+                continue
+        return context.pages[0] if context.pages else context.new_page()
+
     def _open(self, playwright):
         """(browser or None, context): the installed Chrome if wanted and there,
         else Playwright's Chromium; with the saved profile if remembering."""
+        if self.detached:
+            return self._attach(playwright)
         # Without Playwright's "automated browser" switches, so the window is
         # a plain Chrome to AEM and Adobe, like the user's own browser.
         options = {"headless": not self._show_browser, "ignore_default_args": ["--enable-automation"],
@@ -190,6 +238,10 @@ class AemWindow:
         redirect after sign-in), which interrupts this; the notice is only a
         nicety, so that never fails the sign-in."""
         notice = SIGNED_IN_NOTICE if self._block_saving else SIGNED_IN_NOTICE_OPEN
+        if self.detached:
+            notice = notice.replace("<p>Web Technology Inspector takes its AEM screenshots in this window. Keep it open;\n"
+                                    "closing it signs out.</p>",
+                                    "<p>Web Technology Inspector takes its AEM screenshots in this window.</p>" + STAYS_OPEN)
         for _ in range(3):
             try:
                 page.goto("about:blank", wait_until="load", timeout=10_000)  # stops AEM's navigation
@@ -208,7 +260,7 @@ class AemWindow:
                     if self._prepare_context:
                         self._prepare_context(context)
                     self._watch_failures(context)
-                    page = context.pages[0] if context.pages else context.new_page()
+                    page = self._tab(context)
                     page.goto(self.author_base.rstrip("/") + "/aem/start.html",
                               wait_until="domcontentloaded", timeout=60_000)
                     if self._profile_dir:
@@ -231,7 +283,11 @@ class AemWindow:
                     self._ready.set()
                     self._serve(page)
                 finally:
-                    (browser or context).close()
+                    if not self.detached:
+                        (browser or context).close()
+                    elif self._close_browser:
+                        _close_chrome(browser)
+                    # else: leave the detached Chrome open; the app only disconnects
         except BaseException as exc:  # noqa: BLE001 - handed to the waiting caller
             self._error = exc
             self._ready.set()
@@ -281,8 +337,8 @@ def open_window(environment_id: str, author_base: str, *, show_browser: bool = T
     with _lock:
         old = _windows.pop(environment_id, None)
     if old:
-        old.close()
-        old.wait_closed()  # a saved profile can only be open in one window
+        old.close(close_browser=False)  # a detached Chrome is reused by the new window
+        old.wait_closed()
     window = AemWindow(author_base, show_browser=show_browser, prepare_context=prepare_context,
                        block_saving=block_saving, profile_dir=profile_dir, use_chrome=use_chrome)
     window.start(timeout)
@@ -292,13 +348,34 @@ def open_window(environment_id: str, author_base: str, *, show_browser: bool = T
 
 
 def forget_sign_in(environment_id: str, profile_dir: Path) -> None:
-    """Close the environment's window and delete its saved browser profile."""
+    """Close the environment's window and Chrome, and delete its saved profile."""
     with _lock:
         window = _windows.pop(environment_id, None)
     if window:
         window.close()
         window.wait_closed()
+    close_detached_chrome(profile_dir)
     shutil.rmtree(profile_dir, ignore_errors=True)
+
+
+def close_detached_chrome(profile_dir: Path, timeout: int = 15) -> None:
+    """Close a Chrome left running with the profile (e.g. by an earlier app run)."""
+    port = chrome_process.running_port(profile_dir)
+    if not port:
+        return
+    with sync_playwright() as playwright:
+        try:
+            _close_chrome(playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}"))
+        except PlaywrightError:
+            pass
+    for _ in range(timeout * 2):  # its files stay in use until it has exited
+        if not chrome_process.running_port(profile_dir):
+            return
+        time.sleep(0.5)
+
+
+def detached_chrome_running(profile_dir: Path) -> bool:
+    return chrome_process.running_port(profile_dir) is not None
 
 
 def get_window(environment_id: str) -> AemWindow | None:

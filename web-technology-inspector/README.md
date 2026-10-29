@@ -52,9 +52,14 @@ On the **Settings** page:
    Save. The window uses your installed Chrome when there is one.
    Under **AEM window settings**:
    - **Remember my AEM sign-in on this machine** (on by default): the
-     window keeps its own browser profile in `data/aem-browser/` (git-ignored),
-     so the next **Sign in to AEM** goes through by itself while AEM and
-     Adobe still accept the login. **Forget saved AEM sign-in** deletes it.
+     window keeps its own browser profile in `data/aem-browser/` (git-ignored)
+     and Chrome runs as its own program, so **stopping the app leaves the AEM
+     window open and signed in**; on its next start the app connects to that
+     same window again by itself. If Chrome was closed, the next **Sign in to
+     AEM** reuses the saved login while AEM and Adobe still accept it. The app
+     reaches that Chrome through a local debugging port (127.0.0.1 only, so
+     programs on this machine could too). **Forget saved AEM sign-in** closes
+     the window and deletes the profile.
    - **Block saving in the AEM window** (off by default): refuses requests
      that would change content (POSTs to repository paths such as `/content`
      or `/conf`, `/bin/` servlets like publish, any PUT or DELETE), also for

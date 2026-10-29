@@ -18,8 +18,8 @@ from ..investigation import analyze_target, environment_auth, lookup_aem_page, n
 from ..report import build_report, dot_graph, html_report, request_graph, requests_csv, stage_label
 from ..site_config import load, match
 from ..targets import available_targets
-from .shared import (aem_profile_dir, block_saving, forget_aem_sign_in, megabytes, remember_sign_in,
-                     show_error, sign_in_to_aem)
+from .shared import (aem_profile_dir, block_saving, forget_aem_sign_in, megabytes, reconnect_aem_window,
+                     remember_sign_in, show_error, sign_in_to_aem)
 
 CONSENT_MODES = {
     "Leave the consent banner alone": "none",
@@ -106,6 +106,8 @@ def _aem_connection(mappings: list[dict], environments: list[dict], mock: bool) 
     environment = _environment_for(st.session_state.get("inspect_url", ""), mappings, environments)
     if not environment:
         return
+    if reconnect_aem_window(environment):
+        _after_sign_in()
     auth = environment_auth(environment, st.session_state["session_aem_tokens"],
                             st.session_state["aem_ui_sessions"])
     col1, col2 = st.columns([4, 1])

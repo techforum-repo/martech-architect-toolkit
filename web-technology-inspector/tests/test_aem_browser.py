@@ -405,3 +405,51 @@ class AemWindowScriptFieldTests(unittest.TestCase):
         field = result["fields"][0]
         self.assertEqual((field["tabs"], field["kind"]), (["Custom"], "text"))
         self.assertTrue(field["visible"])
+
+
+@unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
+class DetachedChromeTests(unittest.TestCase):
+    """With the sign-in remembered, Chrome outlives the app and is reused."""
+
+    def test_window_survives_an_app_restart_in_the_same_tab(self):
+        import tempfile
+        from pathlib import Path
+        profile = Path(tempfile.mkdtemp()) / "env_detached"
+        self.addCleanup(aem_browser.forget_sign_in, "env_detached", profile)
+        starts = []
+
+        def prepare(context):
+            strict_author([])(context)
+
+            def start(route):
+                starts.append(1)
+                # Only the first sign-in puts AEM's sign-in in the tab's storage:
+                # later screenshots work only in that same, still open tab.
+                script = "sessionStorage.setItem('adobe-ims', 'signed-in')" if len(starts) == 1 else ""
+                route.fulfill(status=200, content_type="text/html",
+                              headers={"Set-Cookie": "login-token=t; Path=/; Secure; Max-Age=3600"},
+                              body=f"<script>{script}</script>Start")
+            context.route(AUTHOR + "/aem/start.html", start)
+
+        def sign_in():
+            return aem_browser.open_window("env_detached", AUTHOR, show_browser=False,
+                                           prepare_context=prepare, timeout=20, profile_dir=profile)
+
+        window = sign_in()
+        self.assertTrue(window.detached)
+        aem_browser.capture_page_properties(window, "/content/site/en", "tracking.example.com")
+
+        # The app stops: its worker goes, Chrome stays.
+        window.close(close_browser=False)
+        window.wait_closed()
+        aem_browser._windows.clear()
+        self.assertTrue(aem_browser.detached_chrome_running(profile))
+
+        # The next app run connects to it again and works in the same tab.
+        window = sign_in()
+        result = aem_browser.capture_page_properties(window, "/content/site/en", "tracking.example.com")
+        self.assertEqual([f["label"] for f in result["fields"]], ["Analytics domain"])
+
+        aem_browser.forget_sign_in("env_detached", profile)
+        self.assertFalse(aem_browser.detached_chrome_running(profile))
+        self.assertFalse(profile.exists())

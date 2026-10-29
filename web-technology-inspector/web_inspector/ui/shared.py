@@ -97,7 +97,7 @@ def aem_profile_dir(environment: dict) -> Path:
     return settings.data_path / "aem-browser" / safe
 
 
-def sign_in_to_aem(environment: dict) -> bool:
+def sign_in_to_aem(environment: dict, *, timeout: int = 300, quiet: bool = False) -> bool:
     """Open an AEM window, wait for the user to sign in, and keep it open for screenshots.
 
     Its login cookies are also kept in memory for the AEM lookups. With
@@ -108,9 +108,11 @@ def sign_in_to_aem(environment: dict) -> bool:
     message = ("Signing in to AEM with your saved login; if AEM asks, sign in in the AEM window."
                if remember and aem_profile_dir(environment).exists() else
                "An AEM window is open: sign in there. Keep it open (it's used for screenshots).")
+    if quiet:
+        message = "Connecting to the AEM window left open..."
     with st.spinner(message):
         try:
-            window = aem_browser.open_window(environment["id"], environment["author_base"],
+            window = aem_browser.open_window(environment["id"], environment["author_base"], timeout=timeout,
                                              show_browser=not mock,
                                              prepare_context=aem_mock.serve_author_ui if mock else None,
                                              block_saving=block_saving(),
@@ -118,14 +120,29 @@ def sign_in_to_aem(environment: dict) -> bool:
                                              use_chrome=not mock)
             state = window.storage_state
         except SignInIncomplete as exc:
-            show_error({"title": "Not signed in", "reasons": [str(exc)]})
+            if not quiet:
+                show_error({"title": "Not signed in", "reasons": [str(exc)]})
             return False
         except Exception as exc:  # noqa: BLE001 - shown to the user as a friendly error
+            if quiet:
+                return False
             error = friendly_error(exc)
             show_error({"title": "Sign-in failed: " + error.title, "reasons": error.reasons})
             return False
     st.session_state["aem_ui_sessions"][environment["id"]] = state
     return True
+
+
+def reconnect_aem_window(environment: dict) -> bool:
+    """After an app restart: connect to the AEM Chrome the last run left open,
+    if it's still signed in (a few seconds; else the user signs in as usual)."""
+    if aem_lookup.is_mock(environment) or not remember_sign_in() or aem_browser.get_window(environment["id"]):
+        return False
+    tried = st.session_state.setdefault("aem_reconnect_tried", set())
+    if environment["id"] in tried or not aem_browser.detached_chrome_running(aem_profile_dir(environment)):
+        return False
+    tried.add(environment["id"])  # once per app session, so a refused one doesn't repeat
+    return sign_in_to_aem(environment, timeout=20, quiet=True)
 
 
 def forget_aem_sign_in(environment: dict) -> None:
