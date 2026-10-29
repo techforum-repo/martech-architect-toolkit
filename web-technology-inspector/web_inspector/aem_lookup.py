@@ -258,32 +258,40 @@ def _fulltext(environment, root, term, auth, limit=20, scope=""):
                 total=payload.get("total", len(hits)), hits=hits)
 
 
-def _titles(environment, root, term, auth, known=(), scope=""):
-    """Components under root whose jcr:title is the term (without punctuation
-    around it), as AEM's Title component stores its text. An exact property
-    search, for when the full-text index doesn't cover component titles."""
-    title = re.sub(r"^[\W_]+|[\W_]+$", "", term.strip())
+# Where AEM's components keep their text: Title and Teaser in jcr:title,
+# Text in text, some custom components in title.
+TEXT_PROPERTIES = ("jcr:title", "text", "title")
+
+
+def _text_properties(environment, root, term, auth, known=(), scope=""):
+    """Components under root whose text properties hold the term, matched
+    here rather than by AEM's full-text index (which may not cover them):
+    every node with one of TEXT_PROPERTIES set is read, and its values are
+    compared ignoring case, HTML, spacing and punctuation around the term."""
     entry = {"scope": scope, "root": root, "http_status": None, "message": "", "status": "not_found",
              "total": 0, "hits": []}
-    if not title:
-        return entry
-    status, payload, message = _get_json(
-        environment,
-        querybuilder_url(environment, [
-            ("path", root), ("property", "jcr:title"), ("property.value", title),
-            ("p.limit", "20"), ("p.hits", "full"),
-        ]),
-        auth,
-    )
-    entry.update(http_status=status, message=message)
-    if payload is None:
-        return dict(entry, status="error")
-    hits = [
-        {"node_path": hit["jcr:path"], "page_path": _page_path(hit["jcr:path"]),
-         "resource_type": hit.get("sling:resourceType", ""), "match": match_kind(hit, term)}
-        for hit in payload.get("hits", [])
-        if hit.get("jcr:path") and hit["jcr:path"] not in known
-    ]
+    hits, seen = [], set(known)
+    for name in TEXT_PROPERTIES:
+        status, payload, message = _get_json(
+            environment,
+            querybuilder_url(environment, [
+                ("path", root), ("property", name), ("property.operation", "exists"),
+                ("p.limit", "100"), ("p.hits", "full"),
+            ]),
+            auth,
+        )
+        entry.update(http_status=status, message=message)
+        if payload is None:
+            return dict(entry, status="error", hits=hits, total=len(hits))
+        for hit in payload.get("hits", []):
+            path = hit.get("jcr:path")
+            match = match_kind({name: hit.get(name, "")}, term) if path else None
+            if not path or path in seen or match["kind"] not in ("text", "words"):
+                continue
+            seen.add(path)
+            hits.append({"node_path": path, "page_path": _page_path(path),
+                         "resource_type": hit.get("sling:resourceType", ""), "match": match})
+    hits.sort(key=lambda hit: MATCH_ORDER.index(hit["match"]["kind"]))
     return dict(entry, status="found" if hits else "not_found", total=len(hits), hits=hits)
 
 
@@ -365,9 +373,10 @@ def search_page_scope(environment, page, term, auth, code_folders=()):
     page_path = page["content_path"]
     results = [_fulltext(environment, page_path + "/jcr:content", term, auth, scope="This page")]
     found = {hit["node_path"] for hit in results[0]["hits"]}
-    titles = _titles(environment, page_path + "/jcr:content", term, auth, found, scope="This page: titles")
-    if titles["hits"] or titles["status"] == "error":
-        results.append(titles)
+    texts = _text_properties(environment, page_path + "/jcr:content", term, auth, found,
+                             scope="This page: component text")
+    if texts["hits"] or texts["status"] == "error":
+        results.append(texts)
 
     for fragment in fragments_used(environment, page_path, auth):
         results.append(_fulltext(environment, fragment, term, auth, scope="Experience fragment"))

@@ -107,12 +107,12 @@ def _querybuilder(parameters):
         ]
         return {"success": True, "results": len(hits), "total": len(hits), "more": False, "hits": hits}
 
-    if parameters.get("property") == "jcr:title":
-        wanted = parameters.get("property.value", "")
+    if parameters.get("property.operation") == "exists" and parameters.get("property") != "fragmentVariationPath":
+        name = parameters.get("property", "")
         hits = [
             dict(props, **{"jcr:path": path})
             for path, props in COMPONENT_PROPS.items()
-            if path.startswith(root + "/") and props.get("jcr:title") == wanted
+            if path.startswith(root + "/") and name in props
         ]
         return {"success": True, "results": len(hits), "total": len(hits), "more": False, "hits": hits}
 

@@ -329,44 +329,46 @@ def _match_label(match: dict | None) -> str:
     return {
         "text": f"{where}: the text",
         "words": f"{where}: all its words, not as one text",
-        "path": f"{where}: only inside a path or link (no screenshot)",
-        "indirect": "not in this node's own properties (no screenshot)",
+        "path": f"{where}: only inside a path or link",
+        "indirect": "not in this node's own properties",
     }[match["kind"]].strip(": ")
 
 
-WEAK_MATCHES = ("path", "indirect")
+# Text matches first: the component or page that holds the text itself.
+MATCH_RANK = {"text": 0, "words": 1, "path": 2, "indirect": 3}
 
 
-def _weak_hits(analysis: dict) -> list[dict]:
-    """Hits not screenshot by default: the text only inside a path or link
-    (e.g. an image's file name), or not in the node's own properties."""
-    return [hit for entry in analysis["aem_references"] for hit in entry["hits"]
-            if hit.get("match", {}).get("kind") in WEAK_MATCHES]
-
-
-def _screenshot_targets(result: dict, analysis: dict, include_weak: bool = False) -> list[dict]:
+def _screenshot_targets(result: dict, analysis: dict) -> list[dict]:
     """What to screenshot for each AEM match: Page Properties when the match is
     on a page's own node, else that component instance's edit dialog. Each
-    target says why it was chosen, relative to the scanned page."""
+    target says why it was chosen, relative to the scanned page, and how it
+    matched when that's only inside a path or not on the node itself."""
     scanned = result["aem_page"]["content_path"]
     targets = {}
     for entry in analysis["aem_references"]:
         for hit in entry["hits"]:
             node, resource_type = hit["node_path"], hit["resource_type"]
-            if not include_weak and hit.get("match", {}).get("kind") in WEAK_MATCHES:
-                continue  # the text isn't in this node's own text (e.g. only in an image's file name)
+            match = hit.get("match") or {"kind": "text"}
+            note = {"path": f"; matched only inside {match.get('property') or 'a path'}",
+                    "indirect": "; not in the node's own properties"}.get(match["kind"], "")
+            rank = MATCH_RANK.get(match["kind"], 0)
             if node.endswith("/jcr:content"):
                 page = hit["page_path"]
-                targets.setdefault(("page", page), {
-                    "kind": "page", "path": page,
-                    "title": f"Page Properties of {page} ({_why(scanned, page, entry['scope'])})"})
+                target = {"kind": "page", "path": page, "rank": rank,
+                          "title": f"Page Properties of {page} ({_why(scanned, page, entry['scope'])}{note})"}
+                key = ("page", page)
             elif node.startswith("/content/") and resource_type and not resource_type.startswith("property "):
-                targets.setdefault(("component", node), {
-                    "kind": "component", "path": node, "resource_type": resource_type,
-                    "title": f"{resource_type.rsplit('/', 1)[-1]} component at {node} "
-                             f"({_why(scanned, node, entry['scope'])})"})
-    # Page Properties first: quick, and a component's dialog takes the editor to load.
-    return sorted(targets.values(), key=lambda t: t["kind"] != "page")
+                target = {"kind": "component", "path": node, "resource_type": resource_type, "rank": rank,
+                          "title": f"{resource_type.rsplit('/', 1)[-1]} component at {node} "
+                                   f"({_why(scanned, node, entry['scope'])}{note})"}
+                key = ("component", node)
+            else:
+                continue
+            if key not in targets or rank < targets[key]["rank"]:
+                targets[key] = target
+    # Best matches first; then Page Properties (quick) before component
+    # dialogs (each loads the page editor).
+    return sorted(targets.values(), key=lambda t: (t["rank"], t["kind"] != "page"))
 
 
 def _capture(result: dict, target_item: dict, term: str) -> dict:
@@ -560,18 +562,7 @@ def _properties_screenshot(result: dict, analysis: dict, target: str, key: tuple
             st.success(f"{taken} screenshot(s) taken.")
         _show_captures(current, target)
     elif st.session_state.get("aem_searched") == key:
-        weak = _weak_hits(analysis)
-        if weak:
-            st.info(f"No screenshot taken: AEM found {len(weak)} match(es), but in none of them is "
-                    f"“{target}” in the component's or page's own text. It's only inside a path or link "
-                    "(e.g. an image's file name, which AEM's search splits into words), or not on the node "
-                    "itself. See **Matched in** above.")
-            if st.button(f"Screenshot these {len(weak)} anyway", key="screenshot_weak"):
-                targets = _screenshot_targets(result, analysis, include_weak=True)[:MAX_AUTO_SCREENSHOTS]
-                _capture_pages(result, targets, target, key)
-                st.rerun()
-        else:
-            st.info("No match in AEM to screenshot: AEM's search found nothing for this target in this scope.")
+        st.info("No match in AEM to screenshot: AEM's search found nothing for this target in this scope.")
 
     with st.expander("Screenshot another page's properties"):
         page = st.selectbox("Page", _properties_pages(result, analysis), key="properties_page")

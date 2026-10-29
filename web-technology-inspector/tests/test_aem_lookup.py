@@ -83,15 +83,21 @@ class TestMockLookups(unittest.TestCase):
         self.assertEqual(result["status"], "found")
         self.assertEqual(result["title"], "Products")
 
-    def test_title_component_found_by_its_exact_title(self):
-        # Even when full-text search doesn't find it, a component whose
-        # jcr:title is the term (punctuation around it ignored) is a hit.
+    def test_component_found_by_its_text_property(self):
+        # Even when full-text search doesn't find it: a component whose title
+        # holds the term, ignoring case and punctuation around it, is a hit.
         page = {"content_path": "/content/example/us/en/products", "template": ""}
-        results = aem_lookup.search_page_scope(self.environment, page, "Tracking embed..", "t")
-        titles = next(r for r in results if r["scope"] == "This page: titles")
-        [hit] = titles["hits"]
+        results = aem_lookup.search_page_scope(self.environment, page, "TRACKING Embed..", "t")
+        texts = next(r for r in results if r["scope"] == "This page: component text")
+        [hit] = texts["hits"]
         self.assertTrue(hit["node_path"].endswith("/root/container/embed"))
         self.assertEqual(hit["match"], {"kind": "text", "property": "jcr:title"})
+
+    def test_start_of_a_longer_title_matches(self):
+        page = {"content_path": "/content/example/us/en/products", "template": ""}
+        results = aem_lookup.search_page_scope(self.environment, page, "Tracking..", "t")
+        texts = next(r for r in results if r["scope"] == "This page: component text")
+        self.assertEqual(len(texts["hits"]), 1)
 
     def test_verify_missing_page(self):
         result = aem_lookup.verify_page(
