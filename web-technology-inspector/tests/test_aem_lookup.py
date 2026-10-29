@@ -83,6 +83,16 @@ class TestMockLookups(unittest.TestCase):
         self.assertEqual(result["status"], "found")
         self.assertEqual(result["title"], "Products")
 
+    def test_title_component_found_by_its_exact_title(self):
+        # Even when full-text search doesn't find it, a component whose
+        # jcr:title is the term (punctuation around it ignored) is a hit.
+        page = {"content_path": "/content/example/us/en/products", "template": ""}
+        results = aem_lookup.search_page_scope(self.environment, page, "Tracking embed..", "t")
+        titles = next(r for r in results if r["scope"] == "This page: titles")
+        [hit] = titles["hits"]
+        self.assertTrue(hit["node_path"].endswith("/root/container/embed"))
+        self.assertEqual(hit["match"], {"kind": "text", "property": "jcr:title"})
+
     def test_verify_missing_page(self):
         result = aem_lookup.verify_page(
             self.environment, "/content/example/us/en/missing", "t"

@@ -192,4 +192,11 @@ def analyze_target(result: dict, target: str, *, session_tokens: dict | None = N
             references = aem_lookup.search_page_scope(environment, page, target.strip(), auth["auth"], folders)
         elif auth["auth"]:
             references = aem_lookup.search_references(environment, target.strip(), auth["auth"])
+    if references:
+        get_logger().info("Search AEM for %r (%s): %s", target.strip(), scope, "; ".join(
+            f"{r.get('scope') or r['root']}: {r['total']} hit(s) "
+            + str([(h["node_path"].rsplit("/", 1)[-1], h.get("match", {}).get("kind", ""),
+                    h.get("match", {}).get("property", "")) for h in r["hits"]]
+                  if r["hits"] else r.get("message") or "")
+            for r in references))
     return {"findings": findings, "aem_references": references}

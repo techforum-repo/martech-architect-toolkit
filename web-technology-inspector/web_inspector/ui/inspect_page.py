@@ -334,7 +334,17 @@ def _match_label(match: dict | None) -> str:
     }[match["kind"]].strip(": ")
 
 
-def _screenshot_targets(result: dict, analysis: dict) -> list[dict]:
+WEAK_MATCHES = ("path", "indirect")
+
+
+def _weak_hits(analysis: dict) -> list[dict]:
+    """Hits not screenshot by default: the text only inside a path or link
+    (e.g. an image's file name), or not in the node's own properties."""
+    return [hit for entry in analysis["aem_references"] for hit in entry["hits"]
+            if hit.get("match", {}).get("kind") in WEAK_MATCHES]
+
+
+def _screenshot_targets(result: dict, analysis: dict, include_weak: bool = False) -> list[dict]:
     """What to screenshot for each AEM match: Page Properties when the match is
     on a page's own node, else that component instance's edit dialog. Each
     target says why it was chosen, relative to the scanned page."""
@@ -343,7 +353,7 @@ def _screenshot_targets(result: dict, analysis: dict) -> list[dict]:
     for entry in analysis["aem_references"]:
         for hit in entry["hits"]:
             node, resource_type = hit["node_path"], hit["resource_type"]
-            if hit.get("match", {}).get("kind") in ("path", "indirect"):
+            if not include_weak and hit.get("match", {}).get("kind") in WEAK_MATCHES:
                 continue  # the text isn't in this node's own text (e.g. only in an image's file name)
             if node.endswith("/jcr:content"):
                 page = hit["page_path"]
@@ -550,7 +560,18 @@ def _properties_screenshot(result: dict, analysis: dict, target: str, key: tuple
             st.success(f"{taken} screenshot(s) taken.")
         _show_captures(current, target)
     elif st.session_state.get("aem_searched") == key:
-        st.caption("No match in AEM to screenshot.")
+        weak = _weak_hits(analysis)
+        if weak:
+            st.info(f"No screenshot taken: AEM found {len(weak)} match(es), but in none of them is "
+                    f"“{target}” in the component's or page's own text. It's only inside a path or link "
+                    "(e.g. an image's file name, which AEM's search splits into words), or not on the node "
+                    "itself. See **Matched in** above.")
+            if st.button(f"Screenshot these {len(weak)} anyway", key="screenshot_weak"):
+                targets = _screenshot_targets(result, analysis, include_weak=True)[:MAX_AUTO_SCREENSHOTS]
+                _capture_pages(result, targets, target, key)
+                st.rerun()
+        else:
+            st.info("No match in AEM to screenshot: AEM's search found nothing for this target in this scope.")
 
     with st.expander("Screenshot another page's properties"):
         page = st.selectbox("Page", _properties_pages(result, analysis), key="properties_page")

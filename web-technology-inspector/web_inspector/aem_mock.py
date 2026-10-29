@@ -107,6 +107,15 @@ def _querybuilder(parameters):
         ]
         return {"success": True, "results": len(hits), "total": len(hits), "more": False, "hits": hits}
 
+    if parameters.get("property") == "jcr:title":
+        wanted = parameters.get("property.value", "")
+        hits = [
+            dict(props, **{"jcr:path": path})
+            for path, props in COMPONENT_PROPS.items()
+            if path.startswith(root + "/") and props.get("jcr:title") == wanted
+        ]
+        return {"success": True, "results": len(hits), "total": len(hits), "more": False, "hits": hits}
+
     if parameters.get("property") == "sling:vanityPath":
         wanted = parameters.get("property.value", "")
         paths = [
