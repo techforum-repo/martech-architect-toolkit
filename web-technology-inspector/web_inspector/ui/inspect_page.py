@@ -452,7 +452,8 @@ def _show_captures(captures: dict, target: str) -> None:
                 st.code("\n".join(shot["failed_responses"][:40]), language=None)
         for number, field in enumerate(shot["fields"], 1):
             where = " › ".join(field.get("tabs") or [])
-            kind = {"hidden value": " (stored value of the field)", "text": " (text in the dialog)"}.get(
+            kind = {"hidden value": " (stored value of the field)", "attribute": " (kept by the field's editor)",
+                    "text": " (text in the dialog)"}.get(
                 field.get("kind"), "")
             st.markdown(f"**Tab: {where}**" if where else "**Tab: none** (the match isn't on a tab)")
             st.caption(f"{field['label'] or field['name'] or 'Match'}{kind}: {field['value'][:160]}")
