@@ -77,8 +77,7 @@ class AemWindowTests(unittest.TestCase):
     def test_several_captures_and_reruns_share_the_window(self):
         self.assertIs(aem_browser.get_window("env_test"), self.window)
         for _ in range(2):
-            result = aem_browser.capture_component_dialog(self.window, "/content/site/en/jcr:content/root/embed",
-                                                          "core/wcm/components/embed/v2/embed", "tracking.example.com")
+            result = aem_browser.capture_page_properties(self.window, "/content/site/en", "tracking.example.com")
             self.assertEqual(len(result["fields"]), 1)
 
     def test_closed_window(self):

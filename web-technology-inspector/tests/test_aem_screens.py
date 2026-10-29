@@ -7,9 +7,9 @@ import unittest
 from web_inspector import aem_browser, aem_mock
 from web_inspector.aem_screens import (
     AemLoginRequired,
+    DialogNotOpened,
     SignInIncomplete,
     _is_sign_in_page,
-    component_dialog_urls,
     properties_url,
 )
 from tests.test_scanner import browser_available
@@ -27,8 +27,43 @@ DIALOG = """<!doctype html><html><head><title>Page Properties</title></head><bod
   function show(i) { document.querySelectorAll('coral-panel').forEach((p, n) => p.style.display = n === i ? '' : 'none'); }
 </script></body></html>"""
 
-LIBS_DIALOG = ("<div class='coral-Form-fieldwrapper'><label>HTML</label>"
-               "<input name='./html' value='https://tracking.example.com/t.js'></div>")
+EMBED = "/content/site/en/jcr:content/root/container/embed"
+
+# A page editor like AEM's: components load through its editor API, which
+# opens a component's dialog in the editor page itself. The side panel also
+# shows the value (e.g. in a content tree), which mustn't count as a match.
+EDITOR = """<!doctype html><html><body>
+<div id="SidePanel"><coral-tablist><coral-tab selected>Content tree</coral-tab></coral-tablist>
+  <input name="search" value="tracking.example.com"></div>
+<div class="cq-Overlay" data-path="%(path)s" style="width:200px;height:40px;background:#eee">Embed</div>
+<script>
+  const DIALOG = `<coral-dialog class="is-open" style="display:block">
+    <coral-tablist><coral-tab onclick="show(0)">Properties</coral-tab><coral-tab onclick="show(1)">Scripts</coral-tab></coral-tablist>
+    <coral-panelstack>
+      <coral-panel><div class="coral-Form-fieldwrapper"><label>Title</label><input name="./jcr:title" value="Embed"></div></coral-panel>
+      <coral-panel style="display:none"><div class="coral-Form-fieldwrapper"><label>analyticsJS</label>
+        <textarea name="./analyticsJS">&lt;script src="https://tracking.example.com/t.js"&gt;&lt;/script&gt;</textarea></div></coral-panel>
+    </coral-panelstack></coral-dialog>`;
+  const open = () => document.body.insertAdjacentHTML('beforeend', DIALOG);
+  function show(i) { document.querySelectorAll('coral-dialog coral-panel').forEach((p, n) => p.style.display = n === i ? '' : 'none'); }
+  setTimeout(() => {  // the editor loads its components after the page
+    window.Granite = {author: {
+      editables: Object.assign([{path: '%(path)s'}], {find(p) { return this.filter(e => e.path === p); }}),
+      layerManager: {layer: 'Preview', getCurrentLayerName() { return this.layer; }, activateLayer(n) { this.layer = n; }},
+      %(api)s
+    }};
+  }, 300);
+  %(wrench)s
+</script></body></html>"""
+
+EDITOR_API = """edit: {Dialog: function (e) { this.editable = e; }},
+      DialogFrame: {openDialog(d) { if (Granite.author.layerManager.layer !== 'Edit') throw 'preview'; open(); }},"""
+
+# No usable editor API: select the component, then the wrench, as an author would.
+EDITOR_WRENCH = """document.querySelector('.cq-Overlay').addEventListener('click', () => {
+    document.body.insertAdjacentHTML('beforeend', '<button data-action="CONFIGURE">Configure</button>');
+    document.querySelector('[data-action=CONFIGURE]').addEventListener('click', open);
+  });"""
 
 NESTED_DIALOG = """<!doctype html><html><body>
 <coral-tabview id="outer">
@@ -84,21 +119,6 @@ class UrlTests(unittest.TestCase):
         # The page being opened is in the query string, so its path never decides it.
         self.assertFalse(_is_sign_in_page(properties_url(AUTHOR, "/content/site/login/en")))
         self.assertFalse(_is_sign_in_page(properties_url(AUTHOR, "/content/oauth-demo/en")))
-
-    def test_relative_resource_type_tries_apps_then_libs(self):
-        urls = component_dialog_urls(AUTHOR, "/content/site/en/jcr:content/root/embed",
-                                     "core/wcm/components/embed/v2/embed")
-        self.assertEqual(urls, [
-            AUTHOR + "/mnt/override/apps/core/wcm/components/embed/v2/embed/_cq_dialog.html"
-                     "/content/site/en/jcr:content/root/embed",
-            AUTHOR + "/mnt/override/libs/core/wcm/components/embed/v2/embed/_cq_dialog.html"
-                     "/content/site/en/jcr:content/root/embed",
-        ])
-
-    def test_absolute_resource_type_keeps_its_root_first(self):
-        urls = component_dialog_urls(AUTHOR, "/content/x/jcr:content/c", "/libs/wcm/foundation/components/text")
-        self.assertIn("/mnt/override/libs/wcm/foundation/components/text/_cq_dialog.html", urls[0])
-        self.assertIn("/mnt/override/apps/", urls[1])
 
 
 @unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
@@ -156,29 +176,39 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(field["tabs"], ["Analytics", "Tracking"])  # outer tab, then the custom inner tab
         self.assertTrue(field["visible"])  # both tabs were opened, so the field is on screen
 
-    def test_component_dialog_falls_back_to_libs_when_apps_answers_500(self):
-        def serve(route):
-            if "/mnt/override/apps/" in route.request.url:
-                route.fulfill(status=500, body="Internal Server Error")
-            else:
-                html(LIBS_DIALOG)(route)
-        window = self.window(author(serve))
-        result = aem_browser.capture_component_dialog(window, "/content/site/en/jcr:content/root/embed",
-                                                      "core/wcm/components/embed/v2/embed", "tracking.example.com")
-        self.assertEqual([a["status"] for a in result["attempts"]], [500, 200])
-        self.assertIn("/mnt/override/libs/", result["url"])
-        self.assertEqual([f["label"] for f in result["fields"]], ["HTML"])
 
-    def test_component_dialog_falls_back_to_libs_when_apps_has_no_dialog(self):
+@unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
+class ComponentDialogTests(unittest.TestCase):
+    def window(self, editor):
         def serve(route):
-            if "/mnt/override/apps/" in route.request.url:
-                route.fulfill(status=404, body="not found")
+            if route.request.url.startswith(AUTHOR + "/editor.html/content/site/en.html"):
+                html(editor)(route)
             else:
-                html(LIBS_DIALOG)(route)
-        window = self.window(author(serve))
-        result = aem_browser.capture_component_dialog(window, "/content/site/en/jcr:content/root/embed",
-                                                      "core/wcm/components/embed/v2/embed", "tracking.example.com")
-        self.assertIn("/mnt/override/libs/", result["url"])
+                route.fulfill(status=404, body="")
+        window = aem_browser.open_window("env_editor", AUTHOR, show_browser=False,
+                                         prepare_context=author(serve), timeout=20)
+        self.addCleanup(aem_browser.close_window, "env_editor")
+        return window
+
+    def test_dialog_opened_through_the_editor_api(self):
+        window = self.window(EDITOR % {"path": EMBED, "api": EDITOR_API, "wrench": ""})
+        result = aem_browser.capture_component_dialog(window, EMBED, "tracking.example.com")
+        [field] = result["fields"]  # the side panel's copy isn't in the dialog, so isn't a match
+        self.assertEqual((field["label"], field["tabs"]), ("analyticsJS", ["Scripts"]))
+        self.assertTrue(field["visible"])
+        self.assertEqual(result["url"], AUTHOR + "/editor.html/content/site/en.html")
+
+    def test_dialog_opened_with_the_wrench_without_the_api(self):
+        window = self.window(EDITOR % {"path": EMBED, "api": "", "wrench": EDITOR_WRENCH})
+        [field] = aem_browser.capture_component_dialog(window, EMBED, "tracking.example.com")["fields"]
+        self.assertEqual(field["tabs"], ["Scripts"])
+
+    def test_component_missing_from_the_editor_is_explained(self):
+        window = self.window(EDITOR % {"path": "/content/site/en/jcr:content/other", "api": EDITOR_API,
+                                       "wrench": ""})
+        with self.assertRaises(DialogNotOpened) as raised:
+            aem_browser.capture_component_dialog(window, EMBED, "tracking.example.com")
+        self.assertIn("no editable component", str(raised.exception))
 
 
 @unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
@@ -198,9 +228,9 @@ class MockAuthorTests(unittest.TestCase):
     def test_component_dialog(self):
         result = aem_browser.capture_component_dialog(
             self.window, "/content/example/us/en/products/jcr:content/root/container/embed",
-            "core/wcm/components/embed/v2/embed", "tracking.example.com")
+            "tracking.example.com")
         self.assertEqual([f["label"] for f in result["fields"]], ["html"])
-        self.assertIn("/mnt/override/apps/", result["url"])
+        self.assertIn("/editor.html/content/example/us/en/products.html", result["url"])
 
 
 @unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")

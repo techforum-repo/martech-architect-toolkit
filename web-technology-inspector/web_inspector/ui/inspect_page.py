@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from .. import aem_browser, aem_lookup, aem_mock, database, mock_scan, preferences, site_credentials
-from ..aem_screens import AemLoginRequired
+from ..aem_screens import AemLoginRequired, DialogNotOpened, editor_url
 from ..errors import friendly_error
 from ..config import settings
 from ..detection import EXPECTED_BEFORE_CONSENT, aem_code_folders, consent_violations
@@ -361,12 +361,15 @@ def _capture(result: dict, target_item: dict, term: str) -> dict:
         if target_item["kind"] == "page":
             shot = aem_browser.capture_page_properties(window, target_item["path"], term)
         else:
-            shot = aem_browser.capture_component_dialog(window, target_item["path"],
-                                                        target_item["resource_type"], term)
+            shot = aem_browser.capture_component_dialog(window, target_item["path"], term)
         return {"item": target_item, "result": shot}
     except aem_browser.WindowClosed:
         return {"item": target_item, "sign_in": True,
                 "reason": "The AEM window was closed, so screenshots need a new sign-in."}
+    except DialogNotOpened as exc:
+        page_path = target_item["path"].split("/jcr:content", 1)[0]
+        return {"item": target_item, "error": {"title": "The component's dialog didn't open", "reasons": [
+            str(exc), f"Check it in AEM: {editor_url(environment['author_base'], page_path)}"]}}
     except AemLoginRequired as exc:
         if not exc.sign_in_page:
             return {"item": target_item, "error": {"title": "The dialog opened a different page", "reasons": [
@@ -414,7 +417,7 @@ def _show_captures(captures: dict, target: str) -> None:
         shot = item["result"]
         status = shot.get("status") or 0
         st.markdown(f"[Open in AEM]({shot['url']}) · " + " · ".join(
-            f"`{a['url'].split('/mnt/', 1)[-1][:90]}` → {a['status']}" for a in shot.get("attempts", [])))
+            f"`{urlsplit(a['url']).path[:100]}` → {a['status']}" for a in shot.get("attempts", [])))
         if status >= 400:
             st.caption(f"AEM answered {status} for every address tried. Use **Open in AEM** to check the "
                        "address in your own browser: if it fails there too, the address form doesn't suit this "

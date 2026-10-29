@@ -135,9 +135,11 @@ configured, for up to six matches:
 - **A page property** (the match is on a page's own node, the scanned page or
   a parent page): Page Properties of that page.
 - **A component property** (the match is on a component node, also inside
-  experience fragments): that component instance's edit dialog, opened at the
-  same address the page editor uses (`/mnt/override/.../_cq_dialog.html<node>`,
-  under `/apps`, else `/libs`).
+  experience fragments): that component instance's edit dialog, opened as an
+  author would: the page (or experience fragment) in the page editor, then
+  that component's dialog, through the editor's own API (as its wrench
+  button does), else by selecting the component and clicking the wrench.
+  Only fields inside that dialog count as matches.
 
 Each screenshot shows the dialog on the tab that holds the field, with the
 field highlighted. Custom and nested tabs are followed: every tab on the way

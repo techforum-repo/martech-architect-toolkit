@@ -194,6 +194,42 @@ def _dialog(page_path, props=None, heading="Page Properties"):
     )
 
 
+# Page editor stub: AEM's editor API, as much of it as the screenshots use.
+EDITOR_SCRIPT = """
+window.Granite = {author: {
+  editables: Object.assign(DIALOGS.map(d => ({path: d.path})),
+                           {find(path) { return this.filter(e => e.path === path); }}),
+  layerManager: {layer: 'Preview', getCurrentLayerName() { return this.layer; },
+                 activateLayer(name) { this.layer = name; }},
+  edit: {Dialog: function (editable) { this.editable = editable; }},
+  DialogFrame: {openDialog(dialog) {
+    if (Granite.author.layerManager.layer !== 'Edit') throw new Error('not in Edit layer');
+    const d = DIALOGS.find(x => x.path === dialog.editable.path);
+    document.body.insertAdjacentHTML('beforeend', '<coral-dialog class="is-open" ' +
+      'style="display:block;position:fixed;inset:40px;background:#fff;border:1px solid #999;padding:16px;overflow:auto">'
+      + d.html + '</coral-dialog>');
+  }},
+}};
+function show(i) { document.querySelectorAll('coral-dialog coral-panel')
+  .forEach((p, n) => p.style.display = n === i ? '' : 'none'); }
+"""
+
+
+def _editor(page_path):
+    """The sample page editor for a page, with its components' dialogs."""
+    import json
+
+    dialogs = []
+    for node, props in COMPONENT_PROPS.items():
+        if node.startswith(page_path + "/jcr:content/"):
+            html = _dialog(node, props, "Component dialog")
+            body = html.split("<body", 1)[1].split(">", 1)[1].rsplit("</body>", 1)[0]
+            dialogs.append({"path": node, "html": body.split("<script>", 1)[0]})
+    return ("<!doctype html><html><head><title>Page editor (sample)</title></head><body>"
+            f"<p>Editing {page_path} (sample)</p><script>const DIALOGS = {json.dumps(dialogs).replace('</', '<' + chr(92) + '/')};"
+            + EDITOR_SCRIPT + "</script></body></html>")
+
+
 def serve_author_ui(context):
     """Playwright route handler serving the sample author UI (mock mode)."""
     def handle(route):
@@ -202,10 +238,9 @@ def serve_author_ui(context):
             # Sample sign-in: author sets its login cookie straight away.
             route.fulfill(status=200, content_type="text/html", body="<title>AEM Start (sample)</title>",
                           headers={"Set-Cookie": "login-token=sample; Path=/; Secure"})
-        elif "/_cq_dialog.html/" in url.path and url.path.startswith("/mnt/override/"):
-            node = "/" + url.path.split("/_cq_dialog.html/", 1)[1]
-            route.fulfill(status=200, content_type="text/html",
-                          body=_dialog(node, COMPONENT_PROPS.get(node, {}), "Component dialog"))
+        elif url.path.startswith("/editor.html/") and url.path.endswith(".html"):
+            page = unquote(url.path[len("/editor.html"):-len(".html")])
+            route.fulfill(status=200, content_type="text/html", body=_editor(page))
         elif url.path == "/mnt/overlay/wcm/core/content/sites/properties.html":
             route.fulfill(status=200, content_type="text/html",
                           body=_dialog(dict(parse_qsl(url.query)).get("item", "")))
