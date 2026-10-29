@@ -1,9 +1,11 @@
 """The signed-in AEM window used for screenshots, against a sample author that
 behaves like the real one: its UI trusts only the tab that signed in."""
 
+import time
 import unittest
+from unittest import mock
 
-from web_inspector import aem_browser
+from web_inspector import aem_browser, aem_screens
 from web_inspector.aem_screens import AemLoginRequired, capture_page_properties
 from tests.test_scanner import browser_available
 
@@ -105,3 +107,46 @@ class WriteRuleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+LATE_FORM = """<!doctype html><html><body><script>
+  if (!sessionStorage.getItem('adobe-ims')) location.href = '""" + SIGN_IN + """';
+  // Like AEM's UI building the form after load, from a request made later.
+  setTimeout(() => fetch('/mnt/form.html').then(r => r.text())
+    .then(html => { document.body.insertAdjacentHTML('beforeend', html); }), 1500);
+</script></body></html>"""
+
+
+@unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
+class AemWindowLateFormTests(unittest.TestCase):
+    def setUp(self):
+        self.seen = []
+        inner = strict_author(self.seen)
+
+        def prepare(context):
+            inner(context)
+
+            def late(route):
+                self.seen.append((route.request.method, route.request.url))
+                if route.request.url.endswith("/mnt/form.html"):
+                    body = DIALOG.split("</script>")[1].split("</body>")[0]
+                else:
+                    body = LATE_FORM
+                route.fulfill(status=200, content_type="text/html", body=body)
+            context.route(AUTHOR + "/mnt/late/**", late)
+            context.route(AUTHOR + "/mnt/form.html", late)
+
+        self.window = aem_browser.open_window("env_late", AUTHOR, show_browser=False,
+                                              prepare_context=prepare, timeout=20)
+        self.addCleanup(aem_browser.close_window, "env_late")
+
+    def test_form_built_after_load_is_captured(self):
+        result = self.window.capture([AUTHOR + "/mnt/late/properties.html"], "tracking.example.com")
+        self.assertEqual([f["label"] for f in result["fields"]], ["Analytics domain"])
+
+    def test_page_requests_are_answered_between_captures(self):
+        # Don't wait for fields, so the form's request comes after the capture returned.
+        with mock.patch.object(aem_screens, "FIELD_WAIT_SECONDS", 0):
+            self.window.capture([AUTHOR + "/mnt/late/properties.html"], "tracking.example.com")
+        time.sleep(4)
+        self.assertTrue(any(url.endswith("/mnt/form.html") for _, url in self.seen))

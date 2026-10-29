@@ -18,7 +18,7 @@ from __future__ import annotations
 import queue
 import threading
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
 from .aem_screens import (
     SignInIncomplete,
@@ -135,10 +135,17 @@ class AemWindow:
     def _serve(self, page) -> None:
         while True:
             try:
-                command, args, box, done = self._commands.get(timeout=1)
+                command, args, box, done = self._commands.get_nowait()
             except queue.Empty:
                 if page.is_closed():
                     raise WindowClosed("The AEM window was closed")
+                # Wait inside Playwright, not on the queue: the read-only guard
+                # answers the page's requests only while Playwright runs here,
+                # so blocking on the queue left AEM's UI hanging between captures.
+                try:
+                    page.wait_for_timeout(200)
+                except PlaywrightError as exc:
+                    raise WindowClosed("The AEM window was closed") from exc
                 continue
             if command == "close":
                 done.set()

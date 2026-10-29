@@ -22,6 +22,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
 
 READ_METHODS = {"GET", "HEAD", "OPTIONS"}
+FIELD_WAIT_SECONDS = 10
 PROPERTIES_PATH = "/mnt/overlay/wcm/core/content/sites/properties.html"
 
 # Finds form fields whose value contains the term, including fields on
@@ -260,6 +261,11 @@ def _capture_in_page(page, author_base: str, urls: list[str], term: str, blocked
             blocked=list(blocked))
 
     fields = page.evaluate(FIND_FIELDS_SCRIPT, term)
+    for _ in range(FIELD_WAIT_SECONDS):  # AEM's UI may still be building the form
+        if fields:
+            break
+        page.wait_for_timeout(1000)
+        fields = page.evaluate(FIND_FIELDS_SCRIPT, term)
     captured = []
     for field in fields[:10]:
         if page.evaluate(SHOW_FIELD_SCRIPT, [field["marker"], field["depth"]]):
