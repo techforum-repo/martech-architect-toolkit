@@ -28,3 +28,11 @@ class TargetTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ComponentNameTests(unittest.TestCase):
+    def test_readable_names(self):
+        from web_inspector.ui.inspect_page import component_name
+        self.assertEqual(component_name("core/wcm/components/title/v3/title"), "Title component")
+        self.assertEqual(component_name("site/components/title/v3"), "Title component")
+        self.assertEqual(component_name("site/components/hero-banner"), "Hero banner component")

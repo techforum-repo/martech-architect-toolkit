@@ -123,7 +123,8 @@ class AemWindow:
         return (self._thread.is_alive() and self._ready.is_set() and self._error is None
                 and not self._closed.is_set())
 
-    def capture(self, urls: list[str], term: str, timeout: int = 60, *, component: str | None = None) -> dict:
+    def capture(self, urls: list[str], term: str, timeout: int = 60, *, component: str | None = None,
+                label: str = "") -> dict:
         """Screenshot the fields containing term: in the first of urls that
         renders (Page Properties), or, with component (a node path), in that
         component's dialog opened in the page editor."""
@@ -131,7 +132,7 @@ class AemWindow:
             raise WindowClosed("The AEM window is closed")
         done = threading.Event()
         box: dict = {}
-        self._commands.put(("capture", (urls, term, timeout, component), box, done))
+        self._commands.put(("capture", (urls, term, timeout, component, label), box, done))
         # Wait in short steps, so a window closed meanwhile fails at once.
         for _ in range(timeout + 60):
             if done.wait(1) or not self._thread.is_alive():
@@ -330,13 +331,14 @@ class AemWindow:
             try:
                 if page.is_closed():
                     raise WindowClosed("The AEM window was closed")
-                urls, term, timeout, component = args
+                urls, term, timeout, component, label = args
                 before, sent_before, failed_before = len(self.blocked), len(self.sent), len(self.failures)
                 log.info("AEM screenshot: %s, term %r", f"component {component}" if component else urls[0], term)
                 if component:
-                    result = _capture_in_editor(page, self.author_base, component, term, self.blocked, timeout)
+                    result = _capture_in_editor(page, self.author_base, component, term, self.blocked, timeout,
+                                                label)
                 else:
-                    result = _capture_in_page(page, self.author_base, urls, term, self.blocked, timeout)
+                    result = _capture_in_page(page, self.author_base, urls, term, self.blocked, timeout, label)
                 _log_result(result, self.failures[failed_before:])
                 result["blocked_writes"] = self.blocked[before:]
                 result["sent_writes"] = self.sent[sent_before:]
@@ -436,10 +438,10 @@ def close_window(environment_id: str) -> None:
         window.close()
 
 
-def capture_page_properties(window: AemWindow, page_path: str, term: str) -> dict:
-    return window.capture([properties_url(window.author_base, page_path)], term)
+def capture_page_properties(window: AemWindow, page_path: str, term: str, label: str = "Page Properties") -> dict:
+    return window.capture([properties_url(window.author_base, page_path)], term, label=label)
 
 
-def capture_component_dialog(window: AemWindow, node_path: str, term: str) -> dict:
+def capture_component_dialog(window: AemWindow, node_path: str, term: str, label: str = "") -> dict:
     """The component's dialog, opened in the page editor as an author would."""
-    return window.capture([], term, timeout=90, component=node_path)
+    return window.capture([], term, timeout=90, component=node_path, label=label)

@@ -537,3 +537,27 @@ class PathWordsTests(unittest.TestCase):
         with mock.patch.object(aem_screens, "FIELD_WAIT_SECONDS", 0):
             result = window.capture([AUTHOR + "/mnt/x"], "Featured stories..")
         self.assertEqual(result["fields"], [])
+
+
+TWICE = CORAL_LIKE.replace(
+    # The value on the input and on an element around it, in one form field.
+    '<label>Analytics domain</label><input name="./analyticsDomain" value="tracking.example.com"></div>',
+    '<label>Title</label><coral-textfield value="tracking.example.com">'
+    '<input name="./jcr:title" value="tracking.example.com"></coral-textfield></div>')
+
+
+@unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
+class OncePerFieldTests(unittest.TestCase):
+    def test_one_screenshot_per_field_with_a_banner(self):
+        def prepare(context):
+            strict_author([])(context)
+            context.route(AUTHOR + "/mnt/**", lambda route: route.fulfill(
+                status=200, content_type="text/html", body=TWICE))
+
+        window = aem_browser.open_window("env_twice", AUTHOR, show_browser=False,
+                                         prepare_context=prepare, timeout=20)
+        self.addCleanup(aem_browser.close_window, "env_twice")
+        result = window.capture([AUTHOR + "/mnt/x"], "tracking.example.com", label="Title component")
+        [field] = result["fields"]
+        self.assertEqual(field["tabs"], ["Advanced"])
+        self.assertTrue(field["image"].startswith(b"\x89PNG"))

@@ -334,6 +334,15 @@ def _match_label(match: dict | None) -> str:
     }[match["kind"]].strip(": ")
 
 
+def component_name(resource_type: str) -> str:
+    """A readable name from a resource type: site/components/title/v3 → "Title component"."""
+    parts = [p for p in resource_type.strip("/").split("/") if p]
+    while len(parts) > 1 and (parts[-1][:1] == "v" and parts[-1][1:].isdigit()):
+        parts.pop()  # version folders (v1, v2) aren't the name
+    name = (parts[-1] if parts else "component").replace("-", " ").replace("_", " ")
+    return name[:1].upper() + name[1:] + " component"
+
+
 # Text matches first: the component or page that holds the text itself.
 MATCH_RANK = {"text": 0, "words": 1, "path": 2, "indirect": 3}
 
@@ -359,7 +368,7 @@ def _screenshot_targets(result: dict, analysis: dict) -> list[dict]:
                 key = ("page", page)
             elif node.startswith("/content/") and resource_type and not resource_type.startswith("property "):
                 target = {"kind": "component", "path": node, "resource_type": resource_type, "rank": rank,
-                          "title": f"{resource_type.rsplit('/', 1)[-1]} component at {node} "
+                          "title": f"{component_name(resource_type)} at {node} "
                                    f"({_why(scanned, node, entry['scope'])}{note})"}
                 key = ("component", node)
             else:
@@ -387,9 +396,11 @@ def _capture(result: dict, target_item: dict, term: str) -> dict:
     term = term.strip()
     try:
         if target_item["kind"] == "page":
-            shot = aem_browser.capture_page_properties(window, target_item["path"], term)
+            shot = aem_browser.capture_page_properties(window, target_item["path"], term,
+                                                       label=f"Page Properties of {target_item['path']}")
         else:
-            shot = aem_browser.capture_component_dialog(window, target_item["path"], term)
+            shot = aem_browser.capture_component_dialog(window, target_item["path"], term,
+                                                        label=component_name(target_item["resource_type"]))
         return {"item": target_item, "result": shot}
     except aem_browser.WindowClosed:
         return {"item": target_item, "sign_in": True,
@@ -497,7 +508,10 @@ def _show_captures(captures: dict, target: str) -> None:
             kind = {"hidden value": " (stored value of the field)", "attribute": " (kept by the field's editor)",
                     "text": " (text in the dialog)"}.get(
                 field.get("kind"), "")
-            st.markdown(f"**Tab: {where}**" if where else "**Tab: none** (the match isn't on a tab)")
+            what = (component_name(item["item"]["resource_type"]) if item["item"]["kind"] == "component"
+                    else "Page Properties")
+            st.markdown(f"**{what} · Tab: {where}**" if where
+                        else f"**{what} · Tab: none** (the match isn't on a tab)")
             how = {"cleaned": " · matched ignoring formatting and punctuation around it",
                    "words": " · matched by all of its words, not the exact text"}.get(field.get("matched"), "")
             st.caption(f"{field['label'] or field['name'] or 'Match'}{kind}: {field['value'][:160]}{how}")

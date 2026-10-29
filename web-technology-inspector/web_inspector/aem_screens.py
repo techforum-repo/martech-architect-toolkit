@@ -69,8 +69,11 @@ FIND_FIELDS_SCRIPT = r"""([term, root]) => {
     const WRAPPER = '.coral-Form-fieldwrapper, .coral-Form-field, .foundation-field-edit';
     const results = [], seen = new Set();
     const add = (element, value, name, kind, matched) => {
-        if (seen.has(element)) return;  // several hidden inputs of one field
-        seen.add(element);
+        // One per form field: an input and the element around it can both
+        // hold the value, as can several hidden inputs of one field.
+        const key = element.closest(WRAPPER) || element;
+        if (seen.has(key)) return;
+        seen.add(key);
         const wrapper = element.closest(WRAPPER) || element.parentElement;
         const label = wrapper && wrapper.querySelector('label, .coral-Form-fieldlabel');
         const tabs = [], how = [];
@@ -263,6 +266,20 @@ EDITOR_STATE_SCRIPT = """path => {
             d.tagName.toLowerCase() + '.' + [...d.classList].join('.') + (d.hasAttribute('open') ? '[open]' : '')),
     };
 }"""
+
+# A bar across the top of the screenshot naming what it shows (component,
+# tab, field), so the image explains itself when shared. Removed right after.
+BANNER_SCRIPT = """text => {
+    document.getElementById('wti-banner')?.remove();
+    const bar = document.createElement('div');
+    bar.id = 'wti-banner';
+    bar.textContent = text;
+    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#1f1f1f;'
+        + 'color:#fff;font:600 14px/1.4 system-ui,sans-serif;padding:8px 14px;'
+        + 'border-bottom:3px solid #e8710a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+    document.body.appendChild(bar);
+}"""
+REMOVE_BANNER_SCRIPT = "() => document.getElementById('wti-banner')?.remove()"
 
 # The tabs showing now, for the details.
 SHOWN_TABS_SCRIPT = """root => [...((root && document.querySelector(root)) || document).querySelectorAll('coral-tab, [role=tab]')]
@@ -481,7 +498,7 @@ def _require_author(page, author_base: str, blocked: list[str], what: str) -> No
 
 
 def _capture_in_page(page, author_base: str, urls: list[str], term: str, blocked: list[str],
-                     timeout: int) -> dict:
+                     timeout: int, label: str = "") -> dict:
     """In an already open tab: open the first of urls that renders (Page
     Properties), then screenshot each field containing term."""
     url, response, attempts = urls[0], None, []
@@ -492,7 +509,8 @@ def _capture_in_page(page, author_base: str, urls: list[str], term: str, blocked
             break
     _settle(page)
     _require_author(page, author_base, blocked, "dialog")
-    return _capture_matches(page, term, url, response.status if response else None, attempts, blocked)
+    return _capture_matches(page, term, url, response.status if response else None, attempts, blocked,
+                            label=label)
 
 
 def editor_url(author_base: str, page_path: str) -> str:
@@ -500,7 +518,7 @@ def editor_url(author_base: str, page_path: str) -> str:
 
 
 def _capture_in_editor(page, author_base: str, node_path: str, term: str, blocked: list[str],
-                       timeout: int) -> dict:
+                       timeout: int, label: str = "") -> dict:
     """A component's dialog as authors open it: the page in the page editor,
     then that component's dialog (AEM doesn't open component dialogs at an
     address of their own the way it does Page Properties), then the matches
@@ -553,20 +571,36 @@ def _capture_in_editor(page, author_base: str, node_path: str, term: str, blocke
         page.wait_for_timeout(500)
     if opened == "newpage":
         _settle(page)
-        return _capture_matches(page, term, page.url, None, attempts, blocked)
+        return _capture_matches(page, term, page.url, None, attempts, blocked, label=label)
     if opened != "inline":
         raise _not_opened(page, f"The dialog of {node_path} didn't show within {DIALOG_WAIT_SECONDS} seconds "
                           f"(opened through the {how}"
                           + ("; the editor says a dialog is open, but its element wasn't found)" if opened else ")"),
                           "waiting for the dialog", node_path)
     page.wait_for_timeout(500)  # the dialog's opening animation
-    return _capture_matches(page, term, url, attempts[0]["status"], attempts, blocked, root=DIALOG_ROOT)
+    return _capture_matches(page, term, url, attempts[0]["status"], attempts, blocked, root=DIALOG_ROOT,
+                            label=label)
+
+
+def _screenshot(page, banner: str) -> bytes:
+    """The tab as shown, with banner across the top."""
+    try:
+        page.evaluate(BANNER_SCRIPT, banner)
+    except PlaywrightError:
+        pass  # navigating: take it without the banner
+    try:
+        return page.screenshot(full_page=False, animations="disabled")
+    finally:
+        try:
+            page.evaluate(REMOVE_BANNER_SCRIPT)
+        except PlaywrightError:
+            pass
 
 
 def _capture_matches(page, term: str, url: str, status, attempts: list[dict], blocked: list[str],
-                     root: str | None = None) -> dict:
+                     root: str | None = None, label: str = "") -> dict:
     """Screenshot each field containing term (only inside root, if given),
-    on its tab."""
+    on its tab; label (e.g. "Title component") heads each screenshot."""
     frame, fields = _find_fields(page, term, root)
     for _ in range(FIELD_WAIT_SECONDS):  # AEM's UI may still be building the form
         if fields:
@@ -584,7 +618,9 @@ def _capture_matches(page, term: str, url: str, status, attempts: list[dict], bl
                 "found_by": field["found_by"], "where": field["where"], "kind": field["kind"],
                 "matched": field["matched"],
                 "shown_tabs": frame.evaluate(SHOWN_TABS_SCRIPT, root),
-                "image": page.screenshot(full_page=False, animations="disabled"),
+                "image": _screenshot(page, " · ".join(part for part in (
+                    label, "Tab: " + (" › ".join(field["tabs"]) or "none"),
+                    "Field: " + (field["label"] or field["name"] or "text")) if part)),
             })
 
     return {
@@ -592,7 +628,8 @@ def _capture_matches(page, term: str, url: str, status, attempts: list[dict], bl
         "status": status,
         "attempts": attempts,
         "fields": captured,
-        "page_image": None if captured else page.screenshot(full_page=False, animations="disabled"),
+        "page_image": None if captured else _screenshot(page, " · ".join(
+            part for part in (label, f"No field shows “{term}”") if part)),
         "no_match": None if captured else _no_match(page, term, root),
         "blocked_writes": list(blocked),
     }
