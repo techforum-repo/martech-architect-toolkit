@@ -8,7 +8,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from .. import VERSION, aem_browser, aem_lookup, aem_mock, preferences
+from .. import CODE_VERSION, VERSION, aem_browser, aem_lookup, aem_mock, preferences
 from ..aem_screens import SignInIncomplete
 from ..config import settings
 from ..errors import FriendlyError, friendly_error
@@ -62,7 +62,7 @@ def render_sidebar() -> str:
             st.session_state["analysis_cache"] = {}
         if mock:
             st.caption("Using sample data. Turn off to scan real websites.")
-        st.caption(f"v{VERSION} · read-only AEM access")
+        st.caption(f"v{VERSION}" + (f" · code {CODE_VERSION}" if CODE_VERSION else ""))
     return page
 
 
