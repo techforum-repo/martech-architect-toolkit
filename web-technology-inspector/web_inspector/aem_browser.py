@@ -307,6 +307,12 @@ def get_window(environment_id: str) -> AemWindow | None:
     return window if window and window.alive else None
 
 
+def open_windows() -> dict[str, AemWindow]:
+    """Every window still open and signed in, by environment id."""
+    with _lock:
+        return {key: window for key, window in _windows.items() if window.alive}
+
+
 def close_window(environment_id: str) -> None:
     with _lock:
         window = _windows.pop(environment_id, None)

@@ -39,6 +39,10 @@ def init_session_state() -> None:
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+    # A browser refresh starts a new app session, but the AEM windows belong
+    # to the app and stay open and signed in: pick their sign-ins up again.
+    for environment_id, window in aem_browser.open_windows().items():
+        st.session_state["aem_ui_sessions"].setdefault(environment_id, window.storage_state)
 
 
 def render_sidebar() -> str:
