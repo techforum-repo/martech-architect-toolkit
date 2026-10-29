@@ -47,7 +47,7 @@ def main():
                                           show_browser=args.show_browser)
     except AemLoginRequired as exc:
         sys.exit(f"{exc}.\nThe token works for data calls but not for author UI pages on this "
-                 "environment; tell Claude, so the app can use a one-time browser sign-in instead.")
+                 "environment. Use the app's 'Sign in to AEM', which takes screenshots in the signed-in window.")
 
     folder = ROOT / "data" / "screenshots" / datetime.now().strftime("%Y%m%d-%H%M%S")
     folder.mkdir(parents=True, exist_ok=True)
