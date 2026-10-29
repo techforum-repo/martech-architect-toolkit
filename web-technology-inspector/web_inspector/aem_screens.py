@@ -68,7 +68,7 @@ FIND_FIELDS_SCRIPT = """([term, root]) => {
             && !field.hasAttribute('selected'));
     const WRAPPER = '.coral-Form-fieldwrapper, .coral-Form-field, .foundation-field-edit';
     const results = [], seen = new Set();
-    const add = (element, value, name, kind) => {
+    const add = (element, value, name, kind, matched) => {
         if (seen.has(element)) return;  // several hidden inputs of one field
         seen.add(element);
         const wrapper = element.closest(WRAPPER) || element.parentElement;
@@ -86,45 +86,66 @@ FIND_FIELDS_SCRIPT = """([term, root]) => {
         const marker = String(results.length);
         element.setAttribute('data-wti-match', marker);
         tabs.forEach((tab, depth) => tab.setAttribute('data-wti-tab-' + marker + '-' + depth, ''));
-        results.push({marker, name, label: label ? label.textContent.trim() : '', kind,
+        results.push({marker, name, label: label ? label.textContent.trim() : '', kind, matched,
                       value: value.slice(0, 300), tabs: tabs.map(t => t.textContent.trim()), depth: tabs.length,
                       found_by: how, where: describe(element)});
     };
-    // 1. Field values, including hidden inputs: code editors and rich text keep
-    // their value in one, shown by an editor next to it; that field is marked.
-    scope.querySelectorAll('input, textarea, select, [value]').forEach(field => {
-        const value = (field.value ?? field.getAttribute('value') ?? '').toString();
-        if (!value.toLowerCase().includes(lowered) || unchosen(field)) return;
-        const hidden = field.type === 'hidden';
-        const shown = hidden ? field.closest(WRAPPER) : field;
-        if (!shown) return;  // a hidden input outside any field: form state, not content
-        add(shown, value, field.getAttribute('name') || '', hidden ? 'hidden value' : 'field');
-    });
-    // 2. Else any attribute (an editor may keep the value in e.g. data-value).
-    if (!results.length) {
-        for (const element of scope.querySelectorAll('*')) {
-            if (results.length >= 10) break;
-            if (element.closest('script, style, noscript, template')) continue;
-            for (const attr of element.attributes) {
-                if (!attr.name.startsWith('data-wti') && attr.value.toLowerCase().includes(lowered)) {
-                    add(element.closest(WRAPPER) || element, attr.value, attr.name, 'attribute');
-                    break;
+    // How strictly a value must match: the exact text first; else as AEM's
+    // full-text search (which found it) would see it: tags, spacing and
+    // punctuation around the term ignored; else all of its words.
+    const clean = text => text.toLowerCase().replace(/<[^>]*>/g, ' ')
+        .replace(/&nbsp;|&#160;|\u00a0/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
+    const core = clean(term).replace(/^[\s\p{P}]+|[\s\p{P}]+$/gu, '');
+    const words = core.split(/[^\p{L}\p{N}]+/u).filter(w => w.length > 1);
+    const levels = [
+        ['exact', value => value.toLowerCase().includes(lowered)],
+        ['cleaned', value => !!core && clean(value).includes(core)],
+        ['words', value => words.length > 1 && words.every(w => clean(value).includes(w))],
+    ];
+    for (const [level, hits] of levels) {
+        // 1. Field values, including hidden inputs: code editors and rich text keep
+        // their value in one, shown by an editor next to it; that field is marked.
+        scope.querySelectorAll('input, textarea, select, [value]').forEach(field => {
+            const value = (field.value ?? field.getAttribute('value') ?? '').toString();
+            if (!hits(value) || unchosen(field)) return;
+            const hidden = field.type === 'hidden';
+            const shown = hidden ? field.closest(WRAPPER) : field;
+            if (!shown) return;  // a hidden input outside any field: form state, not content
+            add(shown, value, field.getAttribute('name') || '', hidden ? 'hidden value' : 'field', level);
+        });
+        // 2. Else any attribute (an editor may keep the value in e.g. data-value).
+        if (!results.length) {
+            for (const element of scope.querySelectorAll('*')) {
+                if (results.length >= 10) break;
+                if (element.closest('script, style, noscript, template')) continue;
+                for (const attr of element.attributes) {
+                    if (!attr.name.startsWith('data-wti') && hits(attr.value)) {
+                        add(element.closest(WRAPPER) || element, attr.value, attr.name, 'attribute', level);
+                        break;
+                    }
                 }
             }
         }
-    }
-    // 3. Else text in the dialog, e.g. as an editor displays it.
-    if (!results.length) {
-        const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
-        for (let node = walker.nextNode(); node && results.length < 10; node = walker.nextNode()) {
-            const element = node.parentElement;
-            if (!element || element.closest('script, style, noscript, template, title')) continue;
-            const text = node.textContent;
-            const at = text.toLowerCase().indexOf(lowered);
-            if (at < 0) continue;
-            add(element.closest(WRAPPER) || element, text.slice(Math.max(0, at - 80), at + lowered.length + 80).trim(),
-                '', 'text');
+        // 3. Else text in the dialog, e.g. as an editor displays it: a text
+        // node for the exact text, else a whole field (rich text spans nodes).
+        if (!results.length && level === 'exact') {
+            const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+            for (let node = walker.nextNode(); node && results.length < 10; node = walker.nextNode()) {
+                const element = node.parentElement;
+                if (!element || element.closest('script, style, noscript, template, title')) continue;
+                const text = node.textContent;
+                const at = text.toLowerCase().indexOf(lowered);
+                if (at < 0) continue;
+                add(element.closest(WRAPPER) || element,
+                    text.slice(Math.max(0, at - 80), at + lowered.length + 80).trim(), '', 'text', level);
+            }
+        } else if (!results.length) {
+            for (const wrapper of scope.querySelectorAll(WRAPPER)) {
+                if (results.length >= 10) break;
+                if (hits(wrapper.textContent)) add(wrapper, wrapper.textContent.trim(), '', 'text', level);
+            }
         }
+        if (results.length) break;
     }
     return results;
 }"""
@@ -558,6 +579,7 @@ def _capture_matches(page, term: str, url: str, status, attempts: list[dict], bl
                 "label": field["label"], "name": field["name"], "value": field["value"],
                 "tabs": field["tabs"], "visible": frame.evaluate(FIELD_VISIBLE_SCRIPT, field["marker"]),
                 "found_by": field["found_by"], "where": field["where"], "kind": field["kind"],
+                "matched": field["matched"],
                 "shown_tabs": frame.evaluate(SHOWN_TABS_SCRIPT, root),
                 "image": page.screenshot(full_page=False, animations="disabled"),
             })

@@ -472,7 +472,9 @@ def _show_captures(captures: dict, target: str) -> None:
                     "text": " (text in the dialog)"}.get(
                 field.get("kind"), "")
             st.markdown(f"**Tab: {where}**" if where else "**Tab: none** (the match isn't on a tab)")
-            st.caption(f"{field['label'] or field['name'] or 'Match'}{kind}: {field['value'][:160]}")
+            how = {"cleaned": " · matched ignoring formatting and punctuation around it",
+                   "words": " · matched by all of its words, not the exact text"}.get(field.get("matched"), "")
+            st.caption(f"{field['label'] or field['name'] or 'Match'}{kind}: {field['value'][:160]}{how}")
             if field.get("visible") is False:
                 st.caption("The field's tab couldn't be opened, so it may not show in this screenshot.")
             st.image(field["image"], width="stretch")

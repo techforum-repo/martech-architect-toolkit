@@ -359,7 +359,8 @@ def _log_result(result: dict, failed: list[str]) -> None:
     attempts = ", ".join(f"{a['url'].split('?')[0]} -> {a['status']}" for a in result.get("attempts", []))
     if result["fields"]:
         log.info("AEM screenshot taken: %s | fields: %s", attempts,
-                 [(f["label"] or f["name"], " > ".join(f["tabs"]), f["kind"], f["visible"]) for f in result["fields"]])
+                 [(f["label"] or f["name"], " > ".join(f["tabs"]), f["kind"], f["matched"], f["visible"])
+                  for f in result["fields"]])
     else:
         log.warning("AEM screenshot found no match: %s | dialog: %s", attempts, result.get("no_match"))
     if failed:

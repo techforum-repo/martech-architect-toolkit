@@ -475,3 +475,44 @@ class AemWindowNoMatchTests(unittest.TestCase):
         self.assertEqual(result["fields"], [])
         self.assertEqual(result["no_match"]["tabs"], ["Basic", "Advanced", "Custom"])
         self.assertFalse(result["no_match"]["in_html"])
+
+
+TEASER = CORAL_LIKE.replace(
+    # Advanced: rich text, its value as HTML in a hidden input.
+    '<label>Analytics domain</label><input name="./analyticsDomain" value="tracking.example.com"></div>',
+    '<label>Description</label><input type="hidden" name="./jcr:description" '
+    'value="&lt;p&gt;Featured&amp;nbsp;&lt;b&gt;stories&lt;/b&gt;&lt;/p&gt;"><div class="rte">Featured stories</div></div>'
+).replace(
+    # Custom: the words in another order.
+    '<label>Tag host</label><input name="./tagHost" value="tags.example.com"></div>',
+    '<label>Title</label><input name="./jcr:title" value="Stories we featured"></div>')
+
+
+@unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
+class LooseMatchTests(unittest.TestCase):
+    def setUp(self):
+        def prepare(context):
+            strict_author([])(context)
+            context.route(AUTHOR + "/mnt/**", lambda route: route.fulfill(
+                status=200, content_type="text/html", body=TEASER))
+
+        self.window = aem_browser.open_window("env_loose", AUTHOR, show_browser=False,
+                                              prepare_context=prepare, timeout=20)
+        self.addCleanup(aem_browser.close_window, "env_loose")
+
+    def test_term_with_punctuation_matches_rich_text(self):
+        with mock.patch.object(aem_screens, "FIELD_WAIT_SECONDS", 0):
+            result = self.window.capture([AUTHOR + "/mnt/x"], "Featured stories..")
+        [field] = result["fields"]
+        self.assertEqual((field["label"], field["tabs"], field["matched"]), ("Description", ["Advanced"], "cleaned"))
+        self.assertTrue(field["visible"])
+
+    def test_words_in_another_order_match_last(self):
+        with mock.patch.object(aem_screens, "FIELD_WAIT_SECONDS", 0):
+            result = self.window.capture([AUTHOR + "/mnt/x"], "featured we stories")
+        [field] = result["fields"]
+        self.assertEqual((field["tabs"], field["matched"]), (["Custom"], "words"))
+
+    def test_exact_text_still_comes_first(self):
+        result = self.window.capture([AUTHOR + "/mnt/x"], "Stories we featured")
+        self.assertEqual([f["matched"] for f in result["fields"]], ["exact"])
