@@ -453,3 +453,35 @@ class DetachedChromeTests(unittest.TestCase):
         aem_browser.forget_sign_in("env_detached", profile)
         self.assertFalse(aem_browser.detached_chrome_running(profile))
         self.assertFalse(profile.exists())
+
+
+ATTRIBUTE_ONLY = CORAL_LIKE.replace(
+    '<label>Tag host</label><input name="./tagHost" value="tags.example.com"></div>',
+    '<label>analyticsJS</label><div class="editor" data-value="&lt;script src=&quot;'
+    'https://www.googletagmanager.com/gtm.js&quot;&gt;"></div></div>')
+
+
+@unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
+class AemWindowNoMatchTests(unittest.TestCase):
+    def open(self, body):
+        def prepare(context):
+            strict_author([])(context)
+            context.route(AUTHOR + "/mnt/**", lambda route: route.fulfill(
+                status=200, content_type="text/html", body=body))
+
+        window = aem_browser.open_window("env_nomatch", AUTHOR, show_browser=False,
+                                         prepare_context=prepare, timeout=20)
+        self.addCleanup(aem_browser.close_window, "env_nomatch")
+        return window
+
+    def test_value_kept_in_an_attribute_opens_its_tab(self):
+        result = self.open(ATTRIBUTE_ONLY).capture([AUTHOR + "/mnt/x"], "www.googletagmanager.com")
+        field = result["fields"][0]
+        self.assertEqual((field["tabs"], field["kind"]), (["Custom"], "attribute"))
+
+    def test_no_match_says_what_the_dialog_has(self):
+        with mock.patch.object(aem_screens, "FIELD_WAIT_SECONDS", 0):
+            result = self.open(CORAL_LIKE).capture([AUTHOR + "/mnt/x"], "www.googletagmanager.com")
+        self.assertEqual(result["fields"], [])
+        self.assertEqual(result["no_match"]["tabs"], ["Basic", "Advanced", "Custom"])
+        self.assertFalse(result["no_match"]["in_html"])

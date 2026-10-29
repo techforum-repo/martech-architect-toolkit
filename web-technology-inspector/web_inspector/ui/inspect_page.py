@@ -434,6 +434,16 @@ def _show_captures(captures: dict, target: str) -> None:
         elif not shot["fields"]:
             st.caption(f"No field in this dialog shows “{target}” (it may be in a field the dialog doesn't "
                        "display). The dialog as opened:")
+            info = shot.get("no_match")
+            if info:
+                st.markdown(
+                    f"- Tabs in the dialog: {', '.join(info['tabs']) or 'none found'}\n"
+                    f"- Fields checked: {info['fields']}"
+                    + (f" (including {info['frames']} frame(s))" if info["frames"] else "") + "\n"
+                    f"- “{target}” anywhere in the dialog's page: **{'yes' if info['in_html'] else 'no'}**")
+                if not info["in_html"]:
+                    st.caption("So the dialog doesn't load this value: AEM found it in a property this dialog "
+                               "has no field for (or on another node, e.g. an inherited parent page).")
         if not shot["fields"]:
             st.image(shot["page_image"], width="stretch")
         if shot.get("failed_responses"):

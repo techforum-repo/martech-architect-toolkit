@@ -102,7 +102,20 @@ FIND_FIELDS_SCRIPT = """term => {
         if (!shown) return;  // a hidden input outside any field: form state, not content
         add(shown, value, field.getAttribute('name') || '', hidden ? 'hidden value' : 'field');
     });
-    // 2. Else text in the dialog, e.g. as an editor displays it.
+    // 2. Else any attribute (an editor may keep the value in e.g. data-value).
+    if (!results.length) {
+        for (const element of document.body.querySelectorAll('*')) {
+            if (results.length >= 10) break;
+            if (element.closest('script, style, noscript, template')) continue;
+            for (const attr of element.attributes) {
+                if (!attr.name.startsWith('data-wti') && attr.value.toLowerCase().includes(lowered)) {
+                    add(element.closest(WRAPPER) || element, attr.value, attr.name, 'attribute');
+                    break;
+                }
+            }
+        }
+    }
+    // 3. Else text in the dialog, e.g. as an editor displays it.
     if (!results.length) {
         const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
         for (let node = walker.nextNode(); node && results.length < 10; node = walker.nextNode()) {
@@ -140,6 +153,13 @@ SHOW_FIELD_SCRIPT = """marker => {
     box.style.outlineOffset = '4px';
     return true;
 }"""
+
+# When nothing matched: what the dialog has, to say why.
+NO_MATCH_SCRIPT = """term => ({
+    tabs: [...document.querySelectorAll('coral-tab, [role=tab]')].map(t => t.textContent.trim()).filter(Boolean).slice(0, 40),
+    fields: document.querySelectorAll('input, textarea, select').length,
+    in_html: document.documentElement.outerHTML.toLowerCase().includes(term.toLowerCase()),
+})"""
 
 # The tabs showing now, for the details.
 SHOWN_TABS_SCRIPT = """() => [...document.querySelectorAll('coral-tab, [role=tab]')]
@@ -323,6 +343,32 @@ def _identity(storage_state: dict | None, browser_version: str) -> tuple[dict | 
     return state, storage_state.get("user_agent") or _desktop_user_agent(browser_version)
 
 
+def _find_fields(page, term: str):
+    """(frame, matches): the dialog's own page first, then any frame in it."""
+    for frame in page.frames:
+        try:
+            fields = frame.evaluate(FIND_FIELDS_SCRIPT, term)
+        except PlaywrightError:
+            continue  # a frame that went away or can't be read
+        if fields:
+            return frame, fields
+    return page.main_frame, []
+
+
+def _no_match(page, term: str) -> dict:
+    """What the dialog has, when nothing in it matched the term."""
+    found = {"tabs": [], "fields": 0, "in_html": False, "frames": len(page.frames) - 1}
+    for frame in page.frames:
+        try:
+            info = frame.evaluate(NO_MATCH_SCRIPT, term)
+        except PlaywrightError:
+            continue
+        found["tabs"] += info["tabs"]
+        found["fields"] += info["fields"]
+        found["in_html"] = found["in_html"] or info["in_html"]
+    return found
+
+
 def _open_tabs(page, marker: str, depth: int) -> None:
     """Open the tabs leading to a field, outermost first: a real mouse click
     on each, as a person would; then, if the field still isn't showing,
@@ -365,22 +411,22 @@ def _capture_in_page(page, author_base: str, urls: list[str], term: str, blocked
             f"instead: {where}", landed=where, title=page.title(), sign_in_page=sign_in_page,
             blocked=list(blocked))
 
-    fields = page.evaluate(FIND_FIELDS_SCRIPT, term)
+    frame, fields = _find_fields(page, term)
     for _ in range(FIELD_WAIT_SECONDS):  # AEM's UI may still be building the form
         if fields:
             break
         page.wait_for_timeout(1000)
-        fields = page.evaluate(FIND_FIELDS_SCRIPT, term)
+        frame, fields = _find_fields(page, term)
     captured = []
     for field in fields[:10]:
-        _open_tabs(page, field["marker"], field["depth"])
-        if page.evaluate(SHOW_FIELD_SCRIPT, field["marker"]):
+        _open_tabs(frame, field["marker"], field["depth"])
+        if frame.evaluate(SHOW_FIELD_SCRIPT, field["marker"]):
             page.wait_for_timeout(300)  # scroll
             captured.append({
                 "label": field["label"], "name": field["name"], "value": field["value"],
-                "tabs": field["tabs"], "visible": page.evaluate(FIELD_VISIBLE_SCRIPT, field["marker"]),
+                "tabs": field["tabs"], "visible": frame.evaluate(FIELD_VISIBLE_SCRIPT, field["marker"]),
                 "found_by": field["found_by"], "where": field["where"], "kind": field["kind"],
-                "shown_tabs": page.evaluate(SHOWN_TABS_SCRIPT),
+                "shown_tabs": frame.evaluate(SHOWN_TABS_SCRIPT),
                 "image": page.screenshot(full_page=False, animations="disabled"),
             })
 
@@ -390,6 +436,7 @@ def _capture_in_page(page, author_base: str, urls: list[str], term: str, blocked
         "attempts": attempts,
         "fields": captured,
         "page_image": None if captured else page.screenshot(full_page=False, animations="disabled"),
+        "no_match": None if captured else _no_match(page, term),
         "blocked_writes": list(blocked),
     }
 
