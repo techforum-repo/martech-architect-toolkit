@@ -445,6 +445,12 @@ def _show_captures(captures: dict, target: str) -> None:
             st.image(field["image"], width="stretch",
                      caption=(f"Tab: {where} · " if where else "")
                      + f"{field['label'] or field['name']} = {field['value'][:120]}")
+            with st.expander("How the tab was chosen"):
+                st.markdown(f"- Tab path found: **{where or 'none'}** ({', '.join(field.get('found_by') or [])})\n"
+                            f"- Tab showing in the screenshot: **{', '.join(field.get('shown_tabs') or []) or 'unknown'}**\n"
+                            f"- Field `{field['name']}` showing: **{'yes' if field.get('visible') else 'no'}**")
+                st.caption("Where the field sits in the page, innermost first:")
+                st.code(field.get("where", ""), language=None)
             st.download_button("Download screenshot", field["image"],
                                f"aem-{item['item']['path'].rsplit('/', 1)[-1]}-{number}.png", "image/png",
                                key=f"aem_screenshot_{index}_{number}")

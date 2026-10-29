@@ -344,3 +344,27 @@ class AemWindowTabTests(unittest.TestCase):
         result = self.window.capture([AUTHOR + "/mnt/x"], "tags.example.com")
         self.assertEqual(result["fields"][0]["tabs"], ["Custom"])
         self.assertTrue(result["fields"][0]["visible"])
+
+
+DROPDOWN_IN_BASIC = CORAL_LIKE.replace(
+    "<coral-panel id=\"p1\">Basic fields</coral-panel>",
+    "<coral-panel id=\"p1\"><select name='./domain'><option value='other.example.com' selected>Other</option>"
+    "<option value='tracking.example.com'>Tracking</option></select></coral-panel>")
+
+
+@unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
+class AemWindowChoiceTests(unittest.TestCase):
+    def test_unchosen_dropdown_option_is_not_a_match(self):
+        def prepare(context):
+            strict_author([])(context)
+            context.route(AUTHOR + "/mnt/**", lambda route: route.fulfill(
+                status=200, content_type="text/html", body=DROPDOWN_IN_BASIC))
+
+        window = aem_browser.open_window("env_choice", AUTHOR, show_browser=False,
+                                         prepare_context=prepare, timeout=20)
+        self.addCleanup(aem_browser.close_window, "env_choice")
+        result = window.capture([AUTHOR + "/mnt/x"], "tracking.example.com")
+        self.assertEqual([f["tabs"] for f in result["fields"]], [["Advanced"]])
+        field = result["fields"][0]
+        self.assertEqual(field["found_by"], ["aria-controls"])
+        self.assertIn("coral-panel#p2", field["where"])

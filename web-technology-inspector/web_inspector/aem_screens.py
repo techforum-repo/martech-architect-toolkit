@@ -35,43 +35,62 @@ FIND_FIELDS_SCRIPT = """term => {
     const PANEL = 'coral-panel, [role=tabpanel]';
     // The tab that shows a panel: AEM links them with aria-labelledby; otherwise
     // the tab at the same position in the panel's own tab group.
+    // Returns [tab, how it was found], or [null, why not].
     const tabFor = panel => {
         const id = panel.getAttribute('aria-labelledby');
-        if (id && document.getElementById(id)) return document.getElementById(id);
+        if (id && document.getElementById(id)) return [document.getElementById(id), 'aria-labelledby'];
         // Or the tab pointing at the panel.
         const controller = panel.id && [...document.querySelectorAll('[aria-controls]')]
             .find(t => t.getAttribute('aria-controls') === panel.id && t.matches('coral-tab, [role=tab]'));
-        if (controller) return controller;
+        if (controller) return [controller, 'aria-controls'];
         const panels = [...panel.parentElement.children].filter(c => c.matches(PANEL));
         let group = panel.parentElement;
         while (group && !group.querySelector(':scope > coral-tablist, :scope > [role=tablist]')) {
             group = group.parentElement;
         }
-        if (!group) return null;
+        if (!group) return [null, 'no tab list around the panel'];
         const list = group.querySelector(':scope > coral-tablist, :scope > [role=tablist]');
         const tabs = [...list.children].filter(c => c.matches('coral-tab, [role=tab]'));
-        return tabs[panels.indexOf(panel)] || null;
+        const tab = tabs[panels.indexOf(panel)];
+        return tab ? [tab, 'position'] : [null, `panel ${panels.indexOf(panel) + 1} of ${panels.length}, ${tabs.length} tabs`];
     };
+    // Where the field sits, innermost first: tag#id.class[role], for the details.
+    const describe = element => {
+        const parts = [];
+        for (let e = element; e && e !== document.body && parts.length < 12; e = e.parentElement) {
+            const cls = [...e.classList].slice(0, 2).map(c => '.' + c).join('');
+            parts.push(e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') + cls
+                       + (e.getAttribute('role') ? `[role=${e.getAttribute('role')}]` : ''));
+        }
+        return parts.join(' < ');
+    };
+    // Choices of a dropdown aren't its value, unless chosen.
+    const unchosen = field => (field.matches('option') && !field.selected)
+        || (field.matches('coral-select-item, coral-selectlist-item, coral-autocomplete-item')
+            && !field.hasAttribute('selected'));
     const results = [];
     const fields = [...document.querySelectorAll('input, textarea, select, [value]')];
     fields.forEach((field, index) => {
         const value = (field.value ?? field.getAttribute('value') ?? '').toString();
-        if (!value.toLowerCase().includes(lowered) || field.type === 'hidden') return;
+        if (!value.toLowerCase().includes(lowered) || field.type === 'hidden' || unchosen(field)) return;
         const wrapper = field.closest('.coral-Form-fieldwrapper, .coral-Form-field, .foundation-field-edit') || field.parentElement;
         const label = wrapper && wrapper.querySelector('label, .coral-Form-fieldlabel');
-        const tabs = [];
+        const tabs = [], how = [];
         for (let panel = field.closest(PANEL); panel; panel = panel.parentElement && panel.parentElement.closest(PANEL)) {
-            const tab = tabFor(panel);
+            const [tab, found] = tabFor(panel);
+            how.unshift(found);
             if (tab) {
                 tab.setAttribute('data-wti-tab', '');
                 tabs.unshift(tab);  // outermost first
             }
         }
+        if (!how.length) how.push('the field is in no tab panel');
         const marker = String(index);
         field.setAttribute('data-wti-match', marker);
         tabs.forEach((tab, depth) => tab.setAttribute('data-wti-tab-' + marker + '-' + depth, ''));
         results.push({marker, name: field.getAttribute('name') || '', label: label ? label.textContent.trim() : '',
-                      value: value.slice(0, 300), tabs: tabs.map(t => t.textContent.trim()), depth: tabs.length});
+                      value: value.slice(0, 300), tabs: tabs.map(t => t.textContent.trim()), depth: tabs.length,
+                      found_by: how, where: describe(field)});
     });
     return results;
 }"""
@@ -98,6 +117,11 @@ SHOW_FIELD_SCRIPT = """marker => {
     box.style.outlineOffset = '4px';
     return true;
 }"""
+
+# The tabs showing now, for the details.
+SHOWN_TABS_SCRIPT = """() => [...document.querySelectorAll('coral-tab, [role=tab]')]
+    .filter(t => t.selected === true || t.getAttribute('aria-selected') === 'true' || t.hasAttribute('selected'))
+    .map(t => t.textContent.trim())"""
 
 # Whether the highlighted field is actually showing (not on a hidden tab).
 FIELD_VISIBLE_SCRIPT = """marker => {
@@ -332,6 +356,8 @@ def _capture_in_page(page, author_base: str, urls: list[str], term: str, blocked
             captured.append({
                 "label": field["label"], "name": field["name"], "value": field["value"],
                 "tabs": field["tabs"], "visible": page.evaluate(FIELD_VISIBLE_SCRIPT, field["marker"]),
+                "found_by": field["found_by"], "where": field["where"],
+                "shown_tabs": page.evaluate(SHOWN_TABS_SCRIPT),
                 "image": page.screenshot(full_page=False, animations="disabled"),
             })
 
