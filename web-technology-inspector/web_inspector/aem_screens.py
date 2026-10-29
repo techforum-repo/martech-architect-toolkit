@@ -19,6 +19,7 @@ from __future__ import annotations
 import posixpath
 from urllib.parse import quote, unquote, urlsplit
 
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
 
@@ -37,6 +38,10 @@ FIND_FIELDS_SCRIPT = """term => {
     const tabFor = panel => {
         const id = panel.getAttribute('aria-labelledby');
         if (id && document.getElementById(id)) return document.getElementById(id);
+        // Or the tab pointing at the panel.
+        const controller = panel.id && [...document.querySelectorAll('[aria-controls]')]
+            .find(t => t.getAttribute('aria-controls') === panel.id && t.matches('coral-tab, [role=tab]'));
+        if (controller) return controller;
         const panels = [...panel.parentElement.children].filter(c => c.matches(PANEL));
         let group = panel.parentElement;
         while (group && !group.querySelector(':scope > coral-tablist, :scope > [role=tablist]')) {
@@ -71,12 +76,20 @@ FIND_FIELDS_SCRIPT = """term => {
     return results;
 }"""
 
-# Opens each tab on the path, outermost first, then highlights the field.
-SHOW_FIELD_SCRIPT = """([marker, depth]) => {
-    for (let level = 0; level < depth; level++) {
-        const tab = document.querySelector(`[data-wti-tab-${marker}-${level}]`);
-        if (tab) tab.click();
-    }
+# Selects one tab on a field's path through Coral itself, for when a click
+# didn't (AEM's tabs may ignore clicks while still setting up).
+SELECT_TAB_SCRIPT = """([marker, level]) => {
+    const tab = document.querySelector(`[data-wti-tab-${marker}-${level}]`);
+    if (!tab) return false;
+    tab.selected = true;  // Coral's coral-tab
+    tab.setAttribute('aria-selected', 'true');
+    const panel = document.getElementById(tab.getAttribute('aria-controls') || '');
+    if (panel) panel.selected = true;  // Coral's coral-panel
+    return true;
+}"""
+
+# Highlights the field and scrolls it into view.
+SHOW_FIELD_SCRIPT = """marker => {
     const field = document.querySelector(`[data-wti-match="${marker}"]`);
     if (!field) return false;
     const box = field.closest('.coral-Form-fieldwrapper, .coral-Form-field') || field;
@@ -263,6 +276,22 @@ def _identity(storage_state: dict | None, browser_version: str) -> tuple[dict | 
     return state, storage_state.get("user_agent") or _desktop_user_agent(browser_version)
 
 
+def _open_tabs(page, marker: str, depth: int) -> None:
+    """Open the tabs leading to a field, outermost first: a real mouse click
+    on each, as a person would; then, if the field still isn't showing,
+    select them through Coral instead."""
+    for level in range(depth):
+        try:
+            page.locator(f"[data-wti-tab-{marker}-{level}]").first.click(timeout=3000)
+        except PlaywrightError:
+            page.evaluate(SELECT_TAB_SCRIPT, [marker, level])
+        page.wait_for_timeout(300)
+    if depth and not page.evaluate(FIELD_VISIBLE_SCRIPT, marker):
+        for level in range(depth):
+            page.evaluate(SELECT_TAB_SCRIPT, [marker, level])
+            page.wait_for_timeout(300)
+
+
 def _capture_in_page(page, author_base: str, urls: list[str], term: str, blocked: list[str],
                      timeout: int) -> dict:
     """In an already open tab: open the first of urls that renders, then
@@ -297,8 +326,9 @@ def _capture_in_page(page, author_base: str, urls: list[str], term: str, blocked
         fields = page.evaluate(FIND_FIELDS_SCRIPT, term)
     captured = []
     for field in fields[:10]:
-        if page.evaluate(SHOW_FIELD_SCRIPT, [field["marker"], field["depth"]]):
-            page.wait_for_timeout(300 + 200 * field["depth"])  # tab switches and scroll
+        _open_tabs(page, field["marker"], field["depth"])
+        if page.evaluate(SHOW_FIELD_SCRIPT, field["marker"]):
+            page.wait_for_timeout(300)  # scroll
             captured.append({
                 "label": field["label"], "name": field["name"], "value": field["value"],
                 "tabs": field["tabs"], "visible": page.evaluate(FIELD_VISIBLE_SCRIPT, field["marker"]),

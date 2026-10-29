@@ -296,3 +296,51 @@ class AemWindowFailureTests(unittest.TestCase):
         self.addCleanup(aem_browser.close_window, "env_plain")
         result = window.capture([AUTHOR + "/mnt/x"], "webdriver-")
         self.assertEqual(result["fields"][0]["value"], "webdriver-false")
+
+
+CORAL_LIKE = """<!doctype html><html><body>
+<coral-tabview>
+  <coral-tablist>
+    <coral-tab id="t1" aria-controls="p1">Basic</coral-tab>
+    <coral-tab id="t2" aria-controls="p2">Advanced</coral-tab>
+    <coral-tab id="t3" aria-controls="p3">Custom</coral-tab>
+  </coral-tablist>
+  <coral-panelstack>
+    <coral-panel id="p1">Basic fields</coral-panel>
+    <coral-panel id="p2" style="display:none"><div class="coral-Form-fieldwrapper">
+      <label>Analytics domain</label><input name="./analyticsDomain" value="tracking.example.com"></div></coral-panel>
+    <coral-panel id="p3" style="display:none"><div class="coral-Form-fieldwrapper">
+      <label>Tag host</label><input name="./tagHost" value="tags.example.com"></div></coral-panel>
+  </coral-panelstack>
+</coral-tabview>
+<script>
+  const show = id => document.querySelectorAll('coral-panel')
+    .forEach(p => p.style.display = p.id === id ? '' : 'none');
+  // Advanced: reacts to a real mouse press only, not to a script's click().
+  document.getElementById('t2').addEventListener('mousedown', () => show('p2'));
+  // Custom: ignores clicks; selectable only through Coral's "selected".
+  Object.defineProperty(document.getElementById('t3'), 'selected', {set: v => v && show('p3')});
+</script></body></html>"""
+
+
+@unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
+class AemWindowTabTests(unittest.TestCase):
+    def setUp(self):
+        def prepare(context):
+            strict_author([])(context)
+            context.route(AUTHOR + "/mnt/**", lambda route: route.fulfill(
+                status=200, content_type="text/html", body=CORAL_LIKE))
+
+        self.window = aem_browser.open_window("env_tabs", AUTHOR, show_browser=False,
+                                              prepare_context=prepare, timeout=20)
+        self.addCleanup(aem_browser.close_window, "env_tabs")
+
+    def test_tab_that_needs_a_real_click_is_opened(self):
+        result = self.window.capture([AUTHOR + "/mnt/x"], "tracking.example.com")
+        self.assertEqual(result["fields"][0]["tabs"], ["Advanced"])
+        self.assertTrue(result["fields"][0]["visible"])
+
+    def test_tab_that_ignores_clicks_is_selected_through_coral(self):
+        result = self.window.capture([AUTHOR + "/mnt/x"], "tags.example.com")
+        self.assertEqual(result["fields"][0]["tabs"], ["Custom"])
+        self.assertTrue(result["fields"][0]["visible"])
