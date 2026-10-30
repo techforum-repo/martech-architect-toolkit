@@ -156,9 +156,10 @@ AEM** at the top and takes the screenshots right after. How the sign-in is
 kept, and the optional saving block, are under **AEM window settings** (see
 step 3 above).
 
-To find the field, the app looks in field values (including the hidden value
-behind a code or rich-text editor), then in attributes an editor keeps it in,
-then in the dialog's text. Each screenshot names its tab, and says how the
+To find the field, the app looks only at what fields hold, never at their
+labels or help text: field values (including the hidden value behind a code or
+rich-text editor), then value attributes an editor keeps it in (`value`,
+`data-value`), then the text inside a rich text editor. Each screenshot names its tab, and says how the
 tab was found. When nothing in the dialog matches, it lists the dialog's tabs
 and whether the value is in the dialog at all. Nothing is clicked except
 dialog tabs, and nothing is typed.

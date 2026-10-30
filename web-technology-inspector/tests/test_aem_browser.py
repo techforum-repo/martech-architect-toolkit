@@ -393,7 +393,7 @@ class AemWindowScriptFieldTests(unittest.TestCase):
         with mock.patch.object(aem_screens, "FIELD_WAIT_SECONDS", 0):
             result = self.window.capture([AUTHOR + "/mnt/x"], "cdn.example.net")
         field = result["fields"][0]
-        self.assertEqual((field["tabs"], field["kind"]), (["Custom"], "text"))
+        self.assertEqual((field["tabs"], field["kind"]), (["Custom"], "editor"))
         self.assertTrue(field["visible"])
 
 
@@ -561,3 +561,26 @@ class OncePerFieldTests(unittest.TestCase):
         [field] = result["fields"]
         self.assertEqual(field["tabs"], ["Advanced"])
         self.assertTrue(field["image"].startswith(b"\x89PNG"))
+
+
+LABEL_ONLY = CORAL_LIKE.replace(
+    # The term only in a label and a description: not what the field holds.
+    '<label>Analytics domain</label><input name="./analyticsDomain" value="tracking.example.com"></div>',
+    '<label>Featured stories</label><input name="./x" value="other"><span class="coral-Form-fieldinfo" '
+    'title="Featured stories">Shown as Featured stories</span></div>')
+
+
+@unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")
+class ValuesOnlyTests(unittest.TestCase):
+    def test_label_and_help_text_are_not_matches(self):
+        def prepare(context):
+            strict_author([])(context)
+            context.route(AUTHOR + "/mnt/**", lambda route: route.fulfill(
+                status=200, content_type="text/html", body=LABEL_ONLY))
+
+        window = aem_browser.open_window("env_labels", AUTHOR, show_browser=False,
+                                         prepare_context=prepare, timeout=20)
+        self.addCleanup(aem_browser.close_window, "env_labels")
+        with mock.patch.object(aem_screens, "FIELD_WAIT_SECONDS", 0):
+            result = window.capture([AUTHOR + "/mnt/x"], "Featured stories")
+        self.assertEqual(result["fields"], [])

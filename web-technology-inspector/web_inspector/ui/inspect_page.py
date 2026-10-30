@@ -506,7 +506,7 @@ def _show_captures(captures: dict, target: str) -> None:
         for number, field in enumerate(shot["fields"], 1):
             where = " › ".join(field.get("tabs") or [])
             kind = {"hidden value": " (stored value of the field)", "attribute": " (kept by the field's editor)",
-                    "text": " (text in the dialog)"}.get(
+                    "editor": " (rich text editor)"}.get(
                 field.get("kind"), "")
             what = (component_name(item["item"]["resource_type"]) if item["item"]["kind"] == "component"
                     else "Page Properties")
