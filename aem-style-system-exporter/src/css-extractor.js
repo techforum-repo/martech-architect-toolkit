@@ -27,26 +27,91 @@ const warnings = [];
 const tokenRows = [];
 const rules = [];
 
+
 function category(name) {
-  const n = name.toLowerCase();
+  const n = String(name || '').toLowerCase().trim();
 
-  if (/color|background|accent|brand|neutral/.test(n))
-    return 'Color';
-
-  if (/font|typograph|line-height|letter/.test(n))
+  // Typography
+  if (
+    /^--(fs-|ffs-|ff-|fw-|lh-|ls-)/.test(n) ||
+    /font|typograph|line-height|letter-spacing|text-size/.test(n)
+  ) {
     return 'Typography';
+  }
 
-  if (/space|padding|margin|gap/.test(n))
+  // Spacing
+  if (
+    /^--(space-|spacing-|gap-|padding-|margin-)/.test(n) ||
+    /gutter|column-gap|row-gap/.test(n)
+  ) {
     return 'Spacing';
+  }
 
-  if (/breakpoint|screen|media/.test(n))
+  // Breakpoints
+  if (
+    /^--(breakpoint-|screen-|media-)/.test(n) ||
+    /viewport/.test(n)
+  ) {
     return 'Breakpoint';
+  }
 
-  if (/shadow/.test(n)) return 'Shadow';
-  if (/border|radius/.test(n)) return 'Border';
+  // Shadows
+  if (/shadow|elevation/.test(n)) {
+    return 'Shadow';
+  }
 
+  // Borders
+  if (/border|radius|outline/.test(n)) {
+    return 'Border';
+  }
+
+  // Backgrounds and surfaces
+  if (
+    /^--(surface-|background-|bg-|gradient-)/.test(n) ||
+    /background-image/.test(n)
+  ) {
+    return 'Background';
+  }
+
+  // Colors
+  if (
+    /^--(color-|neutral-|accent-|brand-|action-|feedback-)/.test(n) ||
+    /color|palette|primary-|secondary-|tertiary-/.test(n)
+  ) {
+    return 'Color';
+  }
+
+  // Sizing and dimensions
+  if (
+    /^--(size-|width-|height-|max-width-|min-width-)/.test(n) ||
+    /dimension/.test(n)
+  ) {
+    return 'Sizing';
+  }
+
+  // Motion and animation
+  if (
+    /animation|transition|duration|easing|motion/.test(n)
+  ) {
+    return 'Animation';
+  }
+
+  // Layering
+  if (
+    /z-index|zindex|layer/.test(n)
+  ) {
+    return 'Layering';
+  }
+
+  // Opacity
+  if (/opacity|alpha/.test(n)) {
+    return 'Opacity';
+  }
+
+  // Uncategorized
   return 'Other';
 }
+
 
 function parseFile(theme, file) {
   const css = fs.readFileSync(file, 'utf8');

@@ -70,16 +70,36 @@ function printProgress() {
   );
 }
 
-function getChildNames(data) {
+
+
+function getChildNames(data, parentPath = "") {
   return Object.entries(data)
-    .filter(([key, value]) =>
-      value !== null &&
-      typeof value === "object" &&
-      !Array.isArray(value) &&
-      !key.startsWith(":")
-    )
+    .filter(([key, value]) => {
+      if (
+        value === null ||
+        typeof value !== "object" ||
+        Array.isArray(value) ||
+        key.startsWith(":")
+      ) {
+        return false;
+      }
+
+      // These embedded objects are not actual children
+      // under the template policy jcr:content node.
+      if (
+        parentPath.startsWith(templateRoot + "/") &&
+        parentPath.endsWith("/policies/jcr:content") &&
+        (key === "jcr:content" || key === "cq:styleGroups")
+      ) {
+        return false;
+      }
+
+      return true;
+    })
     .map(([key]) => key);
 }
+
+
 
 function getProperties(node) {
   return Object.fromEntries(
@@ -167,7 +187,7 @@ async function crawl(resourcePath, depth = 0) {
       printProgress();
     }
 
-    const children = getChildNames(data);
+    const children = getChildNames(data, resourcePath);
 
     for (const child of children) {
       await crawl(
@@ -252,6 +272,8 @@ function collectPolicies() {
   return [...policies.values()];
 }
 
+
+
 function collectTemplatesAndReferences(policies) {
   const templates = [];
   const references = [];
@@ -262,7 +284,12 @@ function collectTemplatesAndReferences(policies) {
 
     const relative = resourcePath.slice(templateRoot.length + 1);
 
-    if (relative && !relative.includes("/")) {
+    // Include only valid AEM editable templates.
+    if (
+      relative &&
+      !relative.includes("/") &&
+      node["jcr:primaryType"] === "cq:Template"
+    ) {
       templates.push({
         path: resourcePath,
         properties: getProperties(node)
@@ -282,17 +309,84 @@ function collectTemplatesAndReferences(policies) {
         ? value
         : `${policyRoot}/${value.replace(/^\/+/, "")}`;
 
+      const found = policySet.has(resolved);
+
       references.push({
         templatePath: resourcePath,
         rawReference: value,
         resolvedPolicyPath: resolved,
-        found: policySet.has(resolved)
+        found,
+        status: found ? "Resolved" : "Unverified"
       });
     }
   }
 
   return { templates, references };
 }
+
+// Verify unique unresolved policy references directly in AEM.
+// Uses the existing requestJson() and local JWT authentication.
+async function verifyPolicyReferences(references) {
+  const unresolvedPaths = [
+    ...new Set(
+      references
+        .filter(ref => !ref.found)
+        .map(ref => ref.resolvedPolicyPath)
+    )
+  ];
+
+  console.log(
+    `[AEM] Verifying ${unresolvedPaths.length} unique unresolved policies`
+  );
+
+  const results = new Map();
+
+  for (const policyPath of unresolvedPaths) {
+    try {
+      await requestJson(policyPath);
+
+      results.set(policyPath, {
+        status: "Exists in AEM - Not Exported"
+      });
+
+      console.log(`[AEM] EXISTS: ${policyPath}`);
+
+    } catch (error) {
+      const message = error.message || String(error);
+
+      const status = /HTTP 404\b/.test(message)
+        ? "Not Found in AEM"
+        : "Verification Failed";
+
+      results.set(policyPath, {
+        status,
+        verificationError: message
+      });
+
+      console.warn(
+        `[AEM] ${status}: ${policyPath} (${message})`
+      );
+    }
+  }
+
+  for (const ref of references) {
+    if (ref.found) continue;
+
+    const result = results.get(ref.resolvedPolicyPath);
+
+    if (result) {
+      ref.status = result.status;
+
+      if (result.verificationError) {
+        ref.verificationError = result.verificationError;
+      }
+    }
+  }
+
+  return references;
+}
+
+
 
 function save(filename, data) {
   const outputPath = path.join(root, "output", filename);
@@ -341,6 +435,8 @@ async function main() {
   log("PROCESS", "Resolving template references...");
   const { templates, references } =
     collectTemplatesAndReferences(policies);
+	
+  await verifyPolicyReferences(references);
 
   const used = new Set(
     references.map(ref => ref.resolvedPolicyPath)

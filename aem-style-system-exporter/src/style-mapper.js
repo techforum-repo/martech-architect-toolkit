@@ -13,6 +13,44 @@ const read = n => JSON.parse(
 const fe = read('fe-data.json');
 const policies = read('policies.json');
 
+
+function classifySelector(selector, targetClass) {
+  try {
+    const results = [];
+
+    selectorParser(selectors => {
+      selectors.each(selectorNode => {
+        const classes = new Set();
+
+        selectorNode.walkClasses(node => {
+          classes.add(node.value);
+        });
+
+        if (!classes.has(targetClass)) return;
+
+        const additionalClasses = [...classes]
+          .filter(name => name !== targetClass);
+
+        results.push({
+          selector: selectorNode.toString(),
+          matchType: additionalClasses.length
+            ? "Conditional"
+            : "Direct",
+          additionalClasses
+        });
+      });
+    }).processSync(selector);
+
+    return results;
+  } catch (error) {
+    console.warn(
+      `[MAP] Failed to classify selector: ${selector}`
+    );
+    return [];
+  }
+}
+
+
 const classIndex = new Map();
 
 for (const rule of fe.rules) {
@@ -63,28 +101,61 @@ for (const policy of policies) {
     ).split(/\s+/).filter(Boolean);
 
     for (const theme of fe.themes) {
-      const matches = [
-        ...new Map(
-          classes.flatMap(c =>
-            classIndex.get(`${theme}\u0000${c}`) || []
-          ).map(r => [
-            `${r.source}|${r.selector}|` +
-            `${r.contexts.join('|')}|` +
-            `${JSON.stringify(r.declarations)}`,
-            r
-          ])
-        ).values()
-      ];
 
-      rows.push({
-        policyPath: policy.path,
-        stylePath: style.path,
-        theme,
-        matchStatus: matches.length
-          ? 'Matched selector (not computed style)'
-          : 'Not found',
-        cssRules: matches
-      });
+		const matches = [
+		  ...new Map(
+			classes.flatMap(targetClass =>
+			  (classIndex.get(`${theme}\u0000${targetClass}`) || [])
+				.flatMap(rule =>
+				  classifySelector(rule.selector, targetClass)
+					.map(classification => ({
+					  ...rule,
+					  selector: classification.selector,
+					  matchType: classification.matchType,
+					  additionalClasses: classification.additionalClasses
+					}))
+				)
+			).map(rule => [
+			  [
+				rule.source,
+				rule.selector,
+				rule.contexts.join("|"),
+				JSON.stringify(rule.declarations)
+			  ].join("|"),
+			  rule
+			])
+		  ).values()
+		];
+
+
+		const directCount = matches.filter(
+		  rule => rule.matchType === "Direct"
+		).length;
+
+		const conditionalCount = matches.filter(
+		  rule => rule.matchType === "Conditional"
+		).length;
+
+		let matchStatus = "Not Found";
+
+		if (directCount && conditionalCount) {
+		  matchStatus = "Mixed";
+		} else if (directCount) {
+		  matchStatus = "Direct";
+		} else if (conditionalCount) {
+		  matchStatus = "Conditional";
+		}
+
+		rows.push({
+		  policyPath: policy.path,
+		  stylePath: style.path,
+		  theme,
+		  matchStatus,
+		  directCount,
+		  conditionalCount,
+		  cssRules: matches
+		});
+
     }
   }
 }
