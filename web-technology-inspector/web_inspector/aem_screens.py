@@ -119,36 +119,29 @@ FIND_FIELDS_SCRIPT = r"""([term, root]) => {
             if (!shown) return;  // a hidden input outside any field: form state, not content
             add(shown, value, field.getAttribute('name') || '', hidden ? 'hidden value' : 'field', level);
         });
-        // 2. Else any attribute (an editor may keep the value in e.g. data-value).
+        // Only what fields hold, never their labels, descriptions or headings.
+        // 2. Else a value attribute (an editor may keep the value in e.g. data-value).
         if (!results.length) {
             for (const element of scope.querySelectorAll('*')) {
                 if (results.length >= 10) break;
                 if (element.closest('script, style, noscript, template')) continue;
                 for (const attr of element.attributes) {
-                    if (!attr.name.startsWith('data-wti') && hits(attr.value)) {
+                    const valueAttr = attr.name === 'value' || attr.name.endsWith('-value');
+                    if (valueAttr && !attr.name.startsWith('data-wti') && hits(attr.value)) {
                         add(element.closest(WRAPPER) || element, attr.value, attr.name, 'attribute', level);
                         break;
                     }
                 }
             }
         }
-        // 3. Else text in the dialog, e.g. as an editor displays it: a text
-        // node for the exact text, else a whole field (rich text spans nodes).
-        if (!results.length && level === 'exact') {
-            const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
-            for (let node = walker.nextNode(); node && results.length < 10; node = walker.nextNode()) {
-                const element = node.parentElement;
-                if (!element || element.closest('script, style, noscript, template, title')) continue;
-                const text = node.textContent;
-                const at = text.toLowerCase().indexOf(lowered);
-                if (at < 0) continue;
-                add(element.closest(WRAPPER) || element,
-                    text.slice(Math.max(0, at - 80), at + lowered.length + 80).trim(), '', 'text', level);
-            }
-        } else if (!results.length) {
-            for (const wrapper of scope.querySelectorAll(WRAPPER)) {
+        // 3. Else the text in a rich text editor (an editable area holds its value).
+        if (!results.length) {
+            for (const editor of scope.querySelectorAll('[contenteditable]:not([contenteditable=false])')) {
                 if (results.length >= 10) break;
-                if (hits(wrapper.textContent)) add(wrapper, wrapper.textContent.trim(), '', 'text', level);
+                if (editor.parentElement && editor.parentElement.closest('[contenteditable]:not([contenteditable=false])')) continue;
+                if (hits(editor.innerHTML) || hits(editor.textContent)) {
+                    add(editor.closest(WRAPPER) || editor, editor.textContent.trim(), '', 'editor', level);
+                }
             }
         }
         if (results.length) break;
