@@ -1,0 +1,24 @@
+
+{
+  "name": "aem-style-system-exporter",
+  "version": "1.0.0",
+  "description": "Export AEM Style System policies, template associations, FE CSS rules and theme tokens into JSON and Excel.",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "export": "node src/master-exporter.js",
+    "export:aem": "node src/exporter.js",
+    "export:fe": "node --env-file=.env src/css-extractor.js",
+    "export:map": "node src/style-mapper.js",
+    "export:excel": "node src/excel-exporter.js",
+    "check": "node --check src/exporter.js && node --check src/master-exporter.js && node --check src/css-extractor.js && node --check src/style-mapper.js && node --check src/excel-exporter.js"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "postcss": "^8.4.49",
+    "postcss-selector-parser": "^7.1.0"
+  }
+}
