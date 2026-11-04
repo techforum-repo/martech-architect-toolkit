@@ -138,8 +138,9 @@ def html_report(report: dict) -> str:
              for d in early], numeric=(2,)))
 
     parts.append("<h2>Technologies</h2>")
-    parts.append(_table(["Technology", "Category", "Evidence", "Example"],
-                        [[t["technology"], t["category"], t["confidence"], (t["evidence"] or [""])[0]]
+    parts.append(_table(["Technology", "Category", "Evidence", "Loaded by", "IDs and versions", "Example"],
+                        [[t["technology"], t["category"], t["confidence"], ", ".join(t.get("loaded_by") or []),
+                          "; ".join(t.get("details") or []), (t["evidence"] or [""])[0]]
                          for t in report.get("technologies", [])]))
 
     parts.append("<h2>Third parties</h2>")

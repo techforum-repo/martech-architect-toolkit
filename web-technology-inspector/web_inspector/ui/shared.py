@@ -83,8 +83,9 @@ def signed_in(environment: dict) -> bool:
 
 
 def block_saving() -> bool:
-    """Whether the AEM window blocks saving (off by default: it's the user's own login)."""
-    return bool(preferences.get("aem_block_saving", False))
+    """Whether the AEM window blocks saving. On by default: the app is
+    read-only, so its window is too unless the user turns this off."""
+    return bool(preferences.get("aem_block_saving", True))
 
 
 def remember_sign_in() -> bool:

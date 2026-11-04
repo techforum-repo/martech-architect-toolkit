@@ -114,7 +114,10 @@ def _querybuilder(parameters):
             for path, props in COMPONENT_PROPS.items()
             if path.startswith(root + "/") and name in props
         ]
-        return {"success": True, "results": len(hits), "total": len(hits), "more": False, "hits": hits}
+        offset = int(parameters.get("p.offset", "0"))
+        page = hits[offset:offset + limit]
+        return {"success": True, "results": len(page), "total": len(hits), "more": offset + limit < len(hits),
+                "hits": page}
 
     if parameters.get("property") == "sling:vanityPath":
         wanted = parameters.get("property.value", "")

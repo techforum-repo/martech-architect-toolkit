@@ -25,6 +25,23 @@ class TargetTests(unittest.TestCase):
         self.assertIn("matched only inside fileReference", targets[1]["title"])
         self.assertNotIn("matched only", targets[0]["title"])
 
+    def test_featured_image_goes_to_page_properties(self):
+        analysis = {"aem_references": [{"scope": "This page", "hits": [
+            hit("x", "path", "fileReference") | {"node_path": PAGE + "/jcr:content/cq:featuredimage",
+                                                 "resource_type": "core/wcm/components/image/v3/image"}]}]}
+        [target] = _screenshot_targets({"aem_page": {"content_path": PAGE}}, analysis)
+        self.assertEqual((target["kind"], target["path"]), ("page", PAGE))
+
+    def test_multifield_item_opens_the_component_holding_it(self):
+        item = PAGE + "/jcr:content/root/teaser/actions/item0"
+        analysis = {"aem_references": [{"scope": "This page", "hits": [
+            hit("x", "text", "link") | {"node_path": item, "resource_type": ""},
+            hit("x", "text", "x") | {"node_path": "/content/dam/site/a.jpg/jcr:content/metadata", "resource_type": ""},
+        ]}]}
+        [target] = _screenshot_targets({"aem_page": {"content_path": PAGE}}, analysis)
+        self.assertEqual((target["kind"], target["path"], target["parent_fallback"]), ("component", item, True))
+        self.assertIn("Component holding", target["title"])
+
 
 if __name__ == "__main__":
     unittest.main()

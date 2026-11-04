@@ -38,6 +38,7 @@ class TestQueryBuilderValidation(unittest.TestCase):
             "path traversal": "path=/content/../home&fulltext=x",
             "repeated parameter": "path=/content&path=/home&fulltext=x",
             "limit too high": "path=/content&fulltext=x&p.limit=5000",
+            "offset not a number": "path=/content&fulltext=x&p.offset=-1",
             "missing path": "fulltext=x",
             "empty query": "",
         }
@@ -207,6 +208,51 @@ class TestPageScope(unittest.TestCase):
         self.assertLessEqual(len(scoped - everything), 1)  # only the inherited property is extra
         self.assertIn("/content/example/us/en/campaigns/spring-sale/jcr:content/root/embed", everything)
         self.assertNotIn("/content/example/us/en/campaigns/spring-sale/jcr:content/root/embed", scoped)
+
+    def failing(self, fails):
+        """_get_json that answers 401 for URLs where fails(url) is true."""
+        real = aem_lookup._get_json
+
+        def fake(environment, url, auth):
+            if fails(url):
+                return 401, None, aem_lookup.STATUS_MESSAGES[401]
+            return real(environment, url, auth)
+        return patch.object(aem_lookup, "_get_json", side_effect=fake)
+
+    def test_failed_fragment_lookup_is_an_error_not_no_fragments(self):
+        with self.failing(lambda url: "fragmentVariationPath" in url):
+            results = self.search()
+        self.assertEqual(results["Experience fragments"]["status"], "error")
+        self.assertIn("experience fragments", results["Experience fragments"]["message"])
+        self.assertNotIn("Experience fragment", results)
+
+    def test_unreadable_parent_pages_are_an_error_not_not_found(self):
+        with self.failing(lambda url: url.endswith("/us/en/jcr:content.json")):
+            inherited = self.search()["Inherited from parent pages"]
+        self.assertEqual(inherited["status"], "error")
+        self.assertEqual(inherited["http_status"], 401)
+        self.assertIn("/content/example/us/en", inherited["message"])
+
+    def test_text_properties_are_read_page_by_page(self):
+        root = "/content/site/en/jcr:content"
+        nodes = [{"jcr:path": f"{root}/root/title_{i}", "jcr:title": "Other"} for i in range(250)]
+        nodes[230]["jcr:title"] = "Featured stories"
+
+        def fake(environment, url, auth):
+            from urllib.parse import parse_qs, urlsplit
+            query = {k: v[0] for k, v in parse_qs(urlsplit(url).query).items()}
+            if query["property"] != "jcr:title":
+                return 200, {"total": 0, "hits": []}, "OK"
+            offset, limit = int(query["p.offset"]), int(query["p.limit"])
+            return 200, {"total": len(nodes), "hits": nodes[offset:offset + limit]}, "OK"
+
+        with patch.object(aem_lookup, "_get_json", side_effect=fake):
+            result = aem_lookup._text_properties(self.environment, root, "Featured stories", "t")
+            self.assertEqual([h["node_path"].rsplit("_", 1)[-1] for h in result["hits"]], ["230"])
+            self.assertNotIn("note", result)
+            nodes.extend({"jcr:path": f"{root}/root/more_{i}", "jcr:title": "x"} for i in range(1000))
+            result = aem_lookup._text_properties(self.environment, root, "Featured stories", "t")
+        self.assertIn("250 more node(s) with jcr:title", result["note"])
 
     def test_ancestors(self):
         self.assertEqual(aem_lookup._ancestors("/content/site/us/en/products"),

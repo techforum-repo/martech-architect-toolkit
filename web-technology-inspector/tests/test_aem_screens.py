@@ -109,6 +109,28 @@ NESTED_DIALOG = """<!doctype html><html><body>
 </script></body></html>"""
 
 
+# A radio group's unchosen options hold values too; only the chosen one counts.
+CHOICES_DIALOG = """<!doctype html><html><body>
+<div class="coral-Form-fieldwrapper"><label>Theme</label>
+  <input type="radio" name="./theme" value="light" checked><input type="radio" name="./theme" value="dark"></div>
+<div class="coral-Form-fieldwrapper"><label>Show dark</label><input type="checkbox" name="./x" value="dark"></div>
+<div class="coral-Form-fieldwrapper"><label>Note</label><input name="./note" value="dark"></div>
+</body></html>"""
+
+# A field inside a collapsed accordion section, Coral-style: the section's
+# content shows only while the item is selected.
+ACCORDION_DIALOG = """<!doctype html><html><head><style>
+coral-accordion-item:not([selected]) > coral-accordion-item-content { display: none; }
+</style></head><body><coral-accordion>
+  <coral-accordion-item selected><coral-accordion-item-label>General</coral-accordion-item-label>
+    <coral-accordion-item-content><div class="coral-Form-fieldwrapper"><label>Title</label>
+      <input name="./jcr:title" value="Home"></div></coral-accordion-item-content></coral-accordion-item>
+  <coral-accordion-item><coral-accordion-item-label>Tracking</coral-accordion-item-label>
+    <coral-accordion-item-content><div class="coral-Form-fieldwrapper"><label>Tracking domain</label>
+      <input name="./trackingDomain" value="tracking.example.com"></div></coral-accordion-item-content></coral-accordion-item>
+</coral-accordion></body></html>"""
+
+
 def author(serve):
     """A fixture author: the start page signs in, serve(route) answers the rest."""
     def prepare(context):
@@ -184,6 +206,17 @@ class CaptureTests(unittest.TestCase):
             aem_browser.capture_page_properties(window, "/content/site/en", "x")
         self.assertFalse(raised.exception.sign_in_page)
 
+    def test_only_chosen_options_match(self):
+        window = self.window(author(html(CHOICES_DIALOG)))
+        result = aem_browser.capture_page_properties(window, "/content/site/en", "dark")
+        self.assertEqual([f["label"] for f in result["fields"]], ["Note"])
+
+    def test_field_in_a_collapsed_accordion_section(self):
+        window = self.window(author(html(ACCORDION_DIALOG)))
+        [field] = aem_browser.capture_page_properties(window, "/content/site/en", "tracking.example.com")["fields"]
+        self.assertEqual((field["label"], field["sections"]), ("Tracking domain", ["Tracking"]))
+        self.assertTrue(field["visible"])  # the section was expanded for the screenshot
+
     def test_field_on_nested_custom_tab(self):
         window = self.window(author(html(NESTED_DIALOG)))
         [field] = aem_browser.capture_page_properties(window, "/content/site/en", "tracking.example.com")["fields"]
@@ -237,6 +270,19 @@ class ComponentDialogTests(unittest.TestCase):
         window = self.window(EDITOR % {"path": EMBED, "api": "", "wrench": EDITOR_WRENCH})
         [field] = aem_browser.capture_component_dialog(window, EMBED, "tracking.example.com")["fields"]
         self.assertEqual(field["tabs"], ["Scripts"])
+
+    def test_multifield_item_opens_the_component_holding_it(self):
+        from unittest.mock import patch
+        from web_inspector import aem_screens
+        window = self.window(EDITOR % {"path": EMBED, "api": EDITOR_API, "wrench": ""})
+        with patch.object(aem_screens, "MISSING_GRACE_SECONDS", 1):
+            result = aem_browser.capture_component_dialog(window, EMBED + "/actions/item0", "tracking.example.com",
+                                                          parent_fallback=True)
+            self.assertEqual(result["component_path"], EMBED)
+            self.assertEqual([f["label"] for f in result["fields"]], ["analyticsJS"])
+            # A component node missing from the editor doesn't open its container's dialog.
+            with self.assertRaises(DialogNotOpened):
+                aem_browser.capture_component_dialog(window, EMBED + "/actions/item0", "tracking.example.com")
 
     def test_component_missing_from_the_editor_is_explained(self):
         window = self.window(EDITOR % {"path": "/content/site/en/jcr:content/other", "api": EDITOR_API,

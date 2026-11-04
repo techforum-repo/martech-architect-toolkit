@@ -261,6 +261,9 @@ def _fulltext(environment, root, term, auth, limit=20, scope=""):
 # Where AEM's components keep their text: Title and Teaser in jcr:title,
 # Text in text, some custom components in title.
 TEXT_PROPERTIES = ("jcr:title", "text", "title")
+# Read in pages of 100 (QueryBuilder's limit here), up to 1,000 nodes per property.
+TEXT_PAGE_SIZE = 100
+TEXT_PAGES = 10
 
 
 def _text_properties(environment, root, term, auth, known=(), scope=""):
@@ -270,29 +273,43 @@ def _text_properties(environment, root, term, auth, known=(), scope=""):
     compared ignoring case, HTML, spacing and punctuation around the term."""
     entry = {"scope": scope, "root": root, "http_status": None, "message": "", "status": "not_found",
              "total": 0, "hits": []}
-    hits, seen = [], set(known)
+    hits, seen, unread = [], set(known), {}
     for name in TEXT_PROPERTIES:
-        status, payload, message = _get_json(
-            environment,
-            querybuilder_url(environment, [
-                ("path", root), ("property", name), ("property.operation", "exists"),
-                ("p.limit", "100"), ("p.hits", "full"),
-            ]),
-            auth,
-        )
-        entry.update(http_status=status, message=message)
-        if payload is None:
-            return dict(entry, status="error", hits=hits, total=len(hits))
-        for hit in payload.get("hits", []):
-            path = hit.get("jcr:path")
-            match = match_kind({name: hit.get(name, "")}, term) if path else None
-            if not path or path in seen or match["kind"] not in ("text", "words"):
-                continue
-            seen.add(path)
-            hits.append({"node_path": path, "page_path": _page_path(path),
-                         "resource_type": hit.get("sling:resourceType", ""), "match": match})
+        offset = 0
+        for _ in range(TEXT_PAGES):
+            status, payload, message = _get_json(
+                environment,
+                querybuilder_url(environment, [
+                    ("path", root), ("property", name), ("property.operation", "exists"),
+                    ("p.limit", str(TEXT_PAGE_SIZE)), ("p.offset", str(offset)), ("p.hits", "full"),
+                ]),
+                auth,
+            )
+            entry.update(http_status=status, message=message)
+            if payload is None:
+                return dict(entry, status="error", hits=hits, total=len(hits))
+            page_hits = payload.get("hits", [])
+            for hit in page_hits:
+                path = hit.get("jcr:path")
+                match = match_kind({name: hit.get(name, "")}, term) if path else None
+                if not path or path in seen or match["kind"] not in ("text", "words"):
+                    continue
+                seen.add(path)
+                hits.append({"node_path": path, "page_path": _page_path(path),
+                             "resource_type": hit.get("sling:resourceType", ""), "match": match})
+            offset += len(page_hits)
+            total = payload.get("total", offset)
+            if not page_hits or offset >= total:
+                break
+        else:
+            unread[name] = total - offset
     hits.sort(key=lambda hit: MATCH_ORDER.index(hit["match"]["kind"]))
-    return dict(entry, status="found" if hits else "not_found", total=len(hits), hits=hits)
+    result = dict(entry, status="found" if hits else "not_found", total=len(hits), hits=hits)
+    if unread:
+        # Say so rather than report "not found" for components never compared.
+        result["note"] = "not compared: " + ", ".join(
+            f"{count} more node(s) with {name}" for name, count in unread.items())
+    return result
 
 
 def search_references(environment, term, auth, roots=QUERYBUILDER_ROOTS, limit=20):
@@ -305,8 +322,9 @@ MAX_ANCESTORS = 8
 
 
 def fragments_used(environment, page_path, auth):
-    """Experience fragment variations the page references."""
-    status, payload, _ = _get_json(
+    """(fragment variation paths the page references, error entry or None).
+    A failed lookup is returned as an error, not as "uses no fragments"."""
+    status, payload, message = _get_json(
         environment,
         querybuilder_url(environment, [
             ("path", page_path + "/jcr:content"),
@@ -319,14 +337,16 @@ def fragments_used(environment, page_path, auth):
         auth,
     )
     if payload is None:
-        return []
+        return [], {"scope": "Experience fragments", "root": page_path + "/jcr:content",
+                    "http_status": status, "message": "couldn't list the page's experience fragments: " + message,
+                    "status": "error", "total": 0, "hits": []}
     paths = [
         hit.get("fragmentVariationPath", "")
         for hit in payload.get("hits", [])
     ]
     return list(dict.fromkeys(
         p for p in paths if isinstance(p, str) and p.startswith("/content/")
-    ))[:MAX_FRAGMENTS]
+    ))[:MAX_FRAGMENTS], None
 
 
 def _ancestors(page_path):
@@ -338,11 +358,14 @@ def _ancestors(page_path):
 def inherited_properties(environment, page_path, term, auth):
     """Parent pages' own properties that mention the term (one node read each)."""
     lowered = term.lower()
-    hits = []
+    hits, failed, last = [], [], (200, "OK")
     for ancestor in _ancestors(page_path):
-        status, node, _ = _get_json(environment, page_node_url(environment, ancestor), auth)
+        status, node, message = _get_json(environment, page_node_url(environment, ancestor), auth)
         if node is None:
-            continue  # not a page, or not readable
+            if status != 404:  # 404: a folder, not a page; anything else wasn't checked
+                failed.append(ancestor)
+                last = (status, message)
+            continue
         for name, value in node.items():
             values = value if isinstance(value, list) else [value]
             if any(isinstance(v, str) and lowered in v.lower() for v in values):
@@ -351,10 +374,18 @@ def inherited_properties(environment, page_path, term, auth):
                     "page_path": ancestor,
                     "resource_type": "property " + name,
                 })
-    return {
+    result = {
         "scope": "Inherited from parent pages", "root": "parent pages", "http_status": 200,
         "message": "OK", "status": "found" if hits else "not_found", "total": len(hits), "hits": hits,
     }
+    if failed:
+        status, message = last
+        note = f"{len(failed)} parent page(s) couldn't be read ({message}): " + ", ".join(failed)
+        if hits:
+            result["note"] = note  # what was read still counts
+        else:
+            result.update(status="error", http_status=status, message=note)
+    return result
 
 
 def _site_conf(template):
@@ -378,7 +409,10 @@ def search_page_scope(environment, page, term, auth, code_folders=()):
     if texts["hits"] or texts["status"] == "error":
         results.append(texts)
 
-    for fragment in fragments_used(environment, page_path, auth):
+    fragments, fragments_error = fragments_used(environment, page_path, auth)
+    if fragments_error:
+        results.append(fragments_error)
+    for fragment in fragments:
         results.append(_fulltext(environment, fragment, term, auth, scope="Experience fragment"))
 
     results.append(inherited_properties(environment, page_path, term, auth))

@@ -31,6 +31,7 @@ FIND_FIELDS_SCRIPT = r"""([term, root]) => {
     const scope = root ? document.querySelector(root) : document.body;
     if (!scope) return [];
     const PANEL = 'coral-panel, [role=tabpanel]';
+    const SECTION = 'coral-accordion-item, .coral-Collapsible';
     // The tab that shows a panel: AEM links them with aria-labelledby; otherwise
     // the tab at the same position in the panel's own tab group.
     // Returns [tab, how it was found], or [null, why not].
@@ -62,10 +63,12 @@ FIND_FIELDS_SCRIPT = r"""([term, root]) => {
         }
         return parts.join(' < ');
     };
-    // Choices of a dropdown aren't its value, unless chosen.
+    // Choices of a dropdown, radio group or checkbox aren't its value, unless chosen.
     const unchosen = field => (field.matches('option') && !field.selected)
         || (field.matches('coral-select-item, coral-selectlist-item, coral-autocomplete-item')
-            && !field.hasAttribute('selected'));
+            && !field.hasAttribute('selected'))
+        || (field.matches('input[type=radio], input[type=checkbox], coral-radio, coral-checkbox')
+            && !field.checked);
     const WRAPPER = '.coral-Form-fieldwrapper, .coral-Form-field, .foundation-field-edit';
     const results = [], seen = new Set();
     const add = (element, value, name, kind, matched) => {
@@ -89,9 +92,18 @@ FIND_FIELDS_SCRIPT = r"""([term, root]) => {
         const marker = String(results.length);
         element.setAttribute('data-wti-match', marker);
         tabs.forEach((tab, depth) => tab.setAttribute('data-wti-tab-' + marker + '-' + depth, ''));
+        // Collapsible sections (accordions) around the field, outermost first:
+        // marked so they can be expanded for the screenshot.
+        const sections = [];
+        for (let item = element.closest(SECTION); item; item = item.parentElement && item.parentElement.closest(SECTION)) {
+            item.setAttribute('data-wti-section-' + marker, '');
+            const heading = item.querySelector(':scope > coral-accordion-item-label, :scope > [role=heading], '
+                                               + ':scope > .coral-Collapsible-header');
+            sections.unshift(heading ? heading.textContent.trim() : '');
+        }
         results.push({marker, name, label: label ? label.textContent.trim() : '', kind, matched,
                       value: value.slice(0, 300), tabs: tabs.map(t => t.textContent.trim()), depth: tabs.length,
-                      found_by: how, where: describe(element)});
+                      sections, found_by: how, where: describe(element)});
     };
     // How strictly a value must match: the exact text first; else as AEM's
     // full-text search (which found it) would see it: tags, spacing and
@@ -159,6 +171,20 @@ SELECT_TAB_SCRIPT = """([marker, level]) => {
     const panel = document.getElementById(tab.getAttribute('aria-controls') || '');
     if (panel) panel.selected = true;  // Coral's coral-panel
     return true;
+}"""
+
+# Expands the collapsible sections (accordions) around a field: Coral's
+# accordion item opens when selected, as when its heading is clicked.
+OPEN_SECTIONS_SCRIPT = """marker => {
+    const items = [...document.querySelectorAll(`[data-wti-section-${marker}]`)];
+    for (const item of items) {
+        item.selected = true;  // coral-accordion-item
+        item.setAttribute('selected', '');
+        item.classList.add('is-active');  // Coral 2 collapsible
+        const content = item.querySelector(':scope > coral-accordion-item-content, :scope > .coral-Collapsible-content');
+        if (content) content.removeAttribute('hidden');
+    }
+    return items.length;
 }"""
 
 # Highlights the field and scrolls it into view.
@@ -343,8 +369,14 @@ def _origin(url: str) -> str:
 
 # Where a POST changes the repository: the Sling POST servlet saves to any
 # node under these roots (how dialogs and Page Properties save), and these
-# servlets publish, move, delete, run workflows or roll out.
-SAVE_ROOTS = ("/content", "/conf", "/apps", "/libs", "/etc", "/var", "/home", "/oak:index", "/jcr:system")
+# servlets publish, move, delete, run workflows or roll out. Also /crx
+# (CRXDE Lite and package manager saves) and /system (the OSGi console).
+SAVE_ROOTS = ("/content", "/conf", "/apps", "/libs", "/etc", "/var", "/home", "/oak:index", "/jcr:system",
+              "/crx", "/system")
+# /mnt/overlay and /mnt/override are the resource merger's view of /libs and
+# /apps, so the same forms and wizards (e.g. Create Page) post there. AEM's UI
+# also POSTs there while it loads (e.g. .../load.json), so only .json is let through.
+MERGED_ROOT = "/mnt"
 SAVE_SERVLETS = ("/bin/", "/adobe/", "/api/")
 # Read-only POSTs under those roots: AEM's GraphQL has queries only.
 READ_POSTS = ("/content/cq:graphql/", "/content/_cq_graphql/")
@@ -374,6 +406,8 @@ def blocks_write(method: str, url: str, author_base: str) -> bool:
     path = _path(url)
     if any(path.startswith(root) for root in READ_POSTS) and path.endswith(".json"):
         return False
+    if path.startswith(MERGED_ROOT + "/"):
+        return not path.endswith(".json")
     return any(path == root or path.startswith(root + "/") or path.startswith(root + ".")
                for root in SAVE_ROOTS) or any(path.startswith(s) for s in SAVE_SERVLETS)
 
@@ -510,8 +544,29 @@ def editor_url(author_base: str, page_path: str) -> str:
     return author_base.rstrip("/") + "/editor.html" + quote(page_path, safe="/:") + ".html"
 
 
+# Seconds the editor may report its components loaded without the one asked
+# for, before the components holding it are tried (or the search gives up).
+MISSING_GRACE_SECONDS = 10
+
+
+def _editable_ancestor(frame, node_path: str) -> str | None:
+    """The nearest component above node_path that the editor has: the one
+    whose dialog holds a node without a dialog of its own (a multifield item)."""
+    page_content = node_path.split("/jcr:content", 1)[0] + "/jcr:content"
+    path = node_path
+    while True:
+        path = path.rsplit("/", 1)[0]
+        if len(path) <= len(page_content):
+            return None
+        try:
+            if frame.evaluate(EDITOR_READY_SCRIPT, path) == "found":
+                return path
+        except PlaywrightError:
+            return None
+
+
 def _capture_in_editor(page, author_base: str, node_path: str, term: str, blocked: list[str],
-                       timeout: int, label: str = "") -> dict:
+                       timeout: int, label: str = "", parent_fallback: bool = False) -> dict:
     """A component's dialog as authors open it: the page in the page editor,
     then that component's dialog (AEM doesn't open component dialogs at an
     address of their own the way it does Page Properties), then the matches
@@ -522,10 +577,19 @@ def _capture_in_editor(page, author_base: str, node_path: str, term: str, blocke
     attempts = [{"url": url, "status": response.status if response else None}]
     _settle(page)
     _require_author(page, author_base, blocked, "page editor")
-    frame, status = None, ""
+    frame, status, missing, component = None, "", 0, node_path
     for _ in range(EDITOR_WAIT_SECONDS * 2):
         frame, status = _editor_status(page, node_path)
         if status == "found":
+            break
+        missing = missing + 1 if status == "loaded" else 0
+        if missing >= MISSING_GRACE_SECONDS * 2:
+            # A node without a dialog of its own (e.g. a multifield item) is
+            # edited in its component's dialog. Only for such nodes: a real
+            # component missing from the editor must not open its container's.
+            holder = _editable_ancestor(frame, node_path) if parent_fallback else None
+            if holder:
+                component, status = holder, "found"
             break
         page.wait_for_timeout(500)
     if status == "loaded":
@@ -537,17 +601,17 @@ def _capture_in_editor(page, author_base: str, node_path: str, term: str, blocke
                           f"within {EDITOR_WAIT_SECONDS} seconds", "editor loading", node_path)
 
     try:
-        how = frame.evaluate(OPEN_DIALOG_SCRIPT, node_path)
+        how = frame.evaluate(OPEN_DIALOG_SCRIPT, component)
     except PlaywrightError:
         how = "no-api"
     if how == "no-api":
         # As an author would: select the component, then the wrench (Configure).
         how = "wrench click"
         try:
-            frame.locator(f'.cq-Overlay[data-path="{node_path}"]').first.click(timeout=10_000)
+            frame.locator(f'.cq-Overlay[data-path="{component}"]').first.click(timeout=10_000)
             frame.locator('button[data-action="CONFIGURE"]').first.click(timeout=10_000)
         except PlaywrightError as exc:
-            raise _not_opened(page, f"Couldn't select {node_path} and click its wrench in the page editor",
+            raise _not_opened(page, f"Couldn't select {component} and click its wrench in the page editor",
                               "clicking the component", node_path) from exc
 
     opened = ""
@@ -564,15 +628,16 @@ def _capture_in_editor(page, author_base: str, node_path: str, term: str, blocke
         page.wait_for_timeout(500)
     if opened == "newpage":
         _settle(page)
-        return _capture_matches(page, term, page.url, None, attempts, blocked, label=label)
+        return dict(_capture_matches(page, term, page.url, None, attempts, blocked, label=label),
+                    component_path=component)
     if opened != "inline":
-        raise _not_opened(page, f"The dialog of {node_path} didn't show within {DIALOG_WAIT_SECONDS} seconds "
+        raise _not_opened(page, f"The dialog of {component} didn't show within {DIALOG_WAIT_SECONDS} seconds "
                           f"(opened through the {how}"
                           + ("; the editor says a dialog is open, but its element wasn't found)" if opened else ")"),
                           "waiting for the dialog", node_path)
     page.wait_for_timeout(500)  # the dialog's opening animation
-    return _capture_matches(page, term, url, attempts[0]["status"], attempts, blocked, root=DIALOG_ROOT,
-                            label=label)
+    return dict(_capture_matches(page, term, url, attempts[0]["status"], attempts, blocked, root=DIALOG_ROOT,
+                                 label=label), component_path=component)
 
 
 def _screenshot(page, banner: str) -> bytes:
@@ -603,16 +668,19 @@ def _capture_matches(page, term: str, url: str, status, attempts: list[dict], bl
     captured = []
     for field in fields[:10]:
         _open_tabs(frame, field["marker"], field["depth"])
+        if field.get("sections") and frame.evaluate(OPEN_SECTIONS_SCRIPT, field["marker"]):
+            page.wait_for_timeout(300)  # the section's opening animation
         if frame.evaluate(SHOW_FIELD_SCRIPT, field["marker"]):
             page.wait_for_timeout(300)  # scroll
             captured.append({
                 "label": field["label"], "name": field["name"], "value": field["value"],
-                "tabs": field["tabs"], "visible": frame.evaluate(FIELD_VISIBLE_SCRIPT, field["marker"]),
+                "tabs": field["tabs"], "sections": field.get("sections") or [], "visible": frame.evaluate(FIELD_VISIBLE_SCRIPT, field["marker"]),
                 "found_by": field["found_by"], "where": field["where"], "kind": field["kind"],
                 "matched": field["matched"],
                 "shown_tabs": frame.evaluate(SHOWN_TABS_SCRIPT, root),
                 "image": _screenshot(page, " · ".join(part for part in (
                     label, "Tab: " + (" › ".join(field["tabs"]) or "none"),
+                    "Section: " + " › ".join(field["sections"]) if field.get("sections") else "",
                     "Field: " + (field["label"] or field["name"] or "text")) if part)),
             })
 

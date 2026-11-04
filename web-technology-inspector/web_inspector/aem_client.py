@@ -22,6 +22,7 @@ QUERYBUILDER_PARAMETERS = frozenset({
     "property.operation",
     "fulltext",
     "p.limit",
+    "p.offset",
     "p.hits",
     "p.properties",
 })
@@ -107,6 +108,13 @@ def _validate_querybuilder(query):
         if name == "property.operation" and value != "exists":
             raise AEMSecurityError(
                 "QueryBuilder property.operation may only be 'exists'"
+            )
+
+        if name == "p.offset" and not (
+            value.isdigit() and int(value) <= 100_000
+        ):
+            raise AEMSecurityError(
+                "QueryBuilder p.offset must be a number up to 100000"
             )
 
         if name == "p.limit" and not (

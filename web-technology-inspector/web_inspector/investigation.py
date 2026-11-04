@@ -111,10 +111,7 @@ def run_investigation(url: str, mappings: list[dict], environments: list[dict], 
 
     browser = result["browser"]
     if browser:
-        result["technologies"] = detect_technologies(
-            browser["requests"], browser["scripts"], browser.get("globals", []))
-        result["domains"] = domain_summary(browser["requests"], urlsplit(url).hostname or "",
-                                           mapping.get("first_party_domains", []))
+        refresh_detection(result)
         stage("technologies", "complete", f"{len(result['technologies'])} detected")
     else:
         stage("technologies", "unavailable")
@@ -126,6 +123,17 @@ def run_investigation(url: str, mappings: list[dict], environments: list[dict], 
         return result
     result["environment"] = environment
     lookup_aem_page(result, session_tokens=session_tokens, ui_sessions=ui_sessions)
+    return result
+
+
+def refresh_detection(result: dict) -> dict:
+    """(Re)detect technologies and per-domain totals from the scan's evidence,
+    e.g. after a domain was labelled, without scanning the page again."""
+    browser, mapping = result["browser"], result.get("mapping_config") or {}
+    result["technologies"] = detect_technologies(
+        browser["requests"], browser["scripts"], browser.get("globals", []), browser.get("page_details"))
+    result["domains"] = domain_summary(browser["requests"], urlsplit(result["url"]).hostname or "",
+                                       mapping.get("first_party_domains", []))
     return result
 
 

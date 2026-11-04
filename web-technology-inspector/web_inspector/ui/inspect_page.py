@@ -9,13 +9,16 @@ from urllib.parse import urlsplit
 import pandas as pd
 import streamlit as st
 
-from .. import aem_browser, aem_lookup, aem_mock, database, mock_scan, preferences, site_credentials
+from .. import (aem_browser, aem_lookup, aem_mock, custom_signatures, database, mock_scan, preferences,
+               site_credentials)
 from ..aem_screens import AemLoginRequired, DialogNotOpened, editor_url
 from ..errors import friendly_error
 from ..logging_setup import LOG_PATH
 from ..config import settings
-from ..detection import EXPECTED_BEFORE_CONSENT, aem_code_folders, consent_violations
-from ..investigation import analyze_target, environment_auth, lookup_aem_page, needs_sign_in, run_investigation
+from ..detection import (EXPECTED_BEFORE_CONSENT, TECHNOLOGIES, aem_code_folders, consent_violations,
+                         unidentified_third_parties)
+from ..investigation import (analyze_target, environment_auth, lookup_aem_page, needs_sign_in, refresh_detection,
+                             run_investigation)
 from ..report import build_report, dot_graph, html_report, request_graph, requests_csv, stage_label
 from ..site_config import load, match
 from ..targets import available_targets
@@ -143,9 +146,10 @@ def _aem_window_settings(environment: dict) -> None:
         block = st.checkbox(
             "Block saving in the AEM window", value=block_saving(),
             help="Refuses requests that would change AEM content (saving, publishing, deleting, "
-                 "workflows), also for anything done in the window by hand. AEM's UI may then fail "
-                 "to load some pages. Off, the window works like your own browser; the app itself "
-                 "only opens pages and clicks dialog tabs. Applies from the next sign-in.")
+                 "workflows), also for anything done in the window by hand, while the app is running. "
+                 "On by default. If AEM's UI fails to load a page with it on, turning it off makes the "
+                 "window work like your own browser; the app itself still only opens pages and clicks "
+                 "dialog tabs. Applies from the next sign-in.")
         if block != block_saving():
             preferences.set("aem_block_saving", block)
         if aem_profile_dir(environment).exists() and st.button(
@@ -189,14 +193,66 @@ def _overview(result: dict, browser: dict) -> None:
 
 
 def _technologies_tab(result: dict) -> None:
-    if not result["technologies"]:
+    if result["technologies"]:
+        st.dataframe(pd.DataFrame([
+            {"Technology": t["technology"], "Category": t["category"], "Evidence": t["confidence"],
+             "Loaded by": ", ".join(t.get("loaded_by") or []), "IDs and versions": "; ".join(t.get("details") or []),
+             "Examples": ", ".join(t["evidence"][:3])}
+            for t in result["technologies"]
+        ]), width="stretch", hide_index=True)
+        st.caption("Loaded by: a tag manager in the request's initiator chain, the page's HTML, or the script "
+                   "that requested it. IDs and versions come from request URLs and the page's own globals.")
+    else:
         st.info("No known technology signatures detected.")
-        return
-    st.dataframe(pd.DataFrame([
-        {"Technology": t["technology"], "Category": t["category"], "Evidence": t["confidence"],
-         "Examples": ", ".join(t["evidence"][:3])}
-        for t in result["technologies"]
-    ]), width="stretch", hide_index=True)
+    _unidentified(result)
+
+
+def _unidentified(result: dict) -> None:
+    """Third parties no signature knows, and naming them for later scans."""
+    unknown = unidentified_third_parties(result["domains"])
+    st.markdown(f"##### Unidentified third parties ({len(unknown)})")
+    if unknown:
+        st.dataframe(pd.DataFrame([
+            {"Domain": d["domain"], "Requests": d["requests"], "Transferred": megabytes(d["bytes"]),
+             "Before consent": d["before_consent"]}
+            for d in unknown
+        ]), width="stretch", hide_index=True)
+    else:
+        st.caption("Every third-party domain matched a known or labelled technology.")
+
+    with st.expander("Name a domain" + (" (saved for later scans)" if unknown else "")):
+        categories = sorted({t.category for t in TECHNOLOGIES}) + [custom_signatures.OTHER_CATEGORY]
+        with st.form("label_domain", clear_on_submit=True):
+            choices = [d["domain"] for d in unknown]
+            domain = (st.selectbox("Domain", choices) if choices
+                      else st.text_input("Domain", placeholder="tags.vendor.com"))
+            name = st.text_input("Technology", placeholder="Vendor or product name")
+            category = st.selectbox("Category", categories, index=len(categories) - 1)
+            st.caption("Matches the domain and its subdomains, on this machine only.")
+            if st.form_submit_button("Save"):
+                values, errors = custom_signatures.clean(domain, name, category)
+                if errors:
+                    for error in errors:
+                        st.error(error)
+                else:
+                    custom_signatures.save(**values)
+                    refresh_detection(result)
+                    st.rerun()
+
+        labels = custom_signatures.load()
+        if labels:
+            st.markdown("**Your labels**")
+            st.dataframe(pd.DataFrame([
+                {"Domain": entry["domain"], "Technology": entry["name"], "Category": entry["category"]}
+                for entry in labels
+            ]), width="stretch", hide_index=True)
+            col1, col2 = st.columns([3, 1])
+            remove = col1.selectbox("Remove a label", [""] + [entry["domain"] for entry in labels],
+                                    format_func=lambda d: d or "Choose a domain")
+            if col2.button("Remove", disabled=not remove):
+                custom_signatures.delete(remove)
+                refresh_detection(result)
+                st.rerun()
 
 
 def _third_parties_tab(result: dict, browser: dict) -> None:
@@ -336,12 +392,18 @@ def _match_label(match: dict | None) -> str:
 
 def component_name(resource_type: str) -> str:
     """A readable name from a resource type: site/components/title/v3 → "Title component"."""
+    if not resource_type:
+        return "Component"
     parts = [p for p in resource_type.strip("/").split("/") if p]
     while len(parts) > 1 and (parts[-1][:1] == "v" and parts[-1][1:].isdigit()):
         parts.pop()  # version folders (v1, v2) aren't the name
     name = (parts[-1] if parts else "component").replace("-", " ").replace("_", " ")
     return name[:1].upper() + name[1:] + " component"
 
+
+# Page nodes edited in Page Properties rather than in the page editor, e.g. the
+# featured image (Image tab). Direct children of the page's jcr:content.
+PAGE_PROPERTY_NODES = ("cq:featuredimage", "image")
 
 # Text matches first: the component or page that holds the text itself.
 MATCH_RANK = {"text": 0, "words": 1, "path": 2, "indirect": 3}
@@ -361,7 +423,8 @@ def _screenshot_targets(result: dict, analysis: dict) -> list[dict]:
             note = {"path": f"; matched only inside {match.get('property') or 'a path'}",
                     "indirect": "; not in the node's own properties"}.get(match["kind"], "")
             rank = MATCH_RANK.get(match["kind"], 0)
-            if node.endswith("/jcr:content"):
+            inside = node.split("/jcr:content/", 1)[1] if "/jcr:content/" in node else ""
+            if node.endswith("/jcr:content") or inside in PAGE_PROPERTY_NODES:
                 page = hit["page_path"]
                 target = {"kind": "page", "path": page, "rank": rank,
                           "title": f"Page Properties of {page} ({_why(scanned, page, entry['scope'])}{note})"}
@@ -370,6 +433,14 @@ def _screenshot_targets(result: dict, analysis: dict) -> list[dict]:
                 target = {"kind": "component", "path": node, "resource_type": resource_type, "rank": rank,
                           "title": f"{component_name(resource_type)} at {node} "
                                    f"({_why(scanned, node, entry['scope'])}{note})"}
+                key = ("component", node)
+            elif node.startswith("/content/") and not node.startswith("/content/dam/") and inside \
+                    and not resource_type:
+                # No component of its own (e.g. a multifield item): edited in the
+                # dialog of the component that holds it.
+                target = {"kind": "component", "path": node, "resource_type": "", "parent_fallback": True,
+                          "rank": rank, "title": f"Component holding {node} "
+                                                 f"({_why(scanned, node, entry['scope'])}{note})"}
                 key = ("component", node)
             else:
                 continue
@@ -400,7 +471,8 @@ def _capture(result: dict, target_item: dict, term: str) -> dict:
                                                        label=f"Page Properties of {target_item['path']}")
         else:
             shot = aem_browser.capture_component_dialog(window, target_item["path"], term,
-                                                        label=component_name(target_item["resource_type"]))
+                                                        label=component_name(target_item["resource_type"]),
+                                                        parent_fallback=target_item.get("parent_fallback", False))
         return {"item": target_item, "result": shot}
     except aem_browser.WindowClosed:
         return {"item": target_item, "sign_in": True,
@@ -478,6 +550,8 @@ def _show_captures(captures: dict, target: str) -> None:
             continue
         shot = item["result"]
         status = shot.get("status") or 0
+        if shot.get("component_path") and shot["component_path"] != item["item"]["path"]:
+            st.caption(f"Opened the dialog of the component holding it: `{shot['component_path']}`")
         st.markdown(f"[Open in AEM]({shot['url']}) · " + " · ".join(
             f"`{urlsplit(a['url']).path[:100]}` → {a['status']}" for a in shot.get("attempts", [])))
         if status >= 400:
@@ -505,6 +579,8 @@ def _show_captures(captures: dict, target: str) -> None:
                 st.code("\n".join(shot["failed_responses"][:40]), language=None)
         for number, field in enumerate(shot["fields"], 1):
             where = " › ".join(field.get("tabs") or [])
+            if field.get("sections"):
+                where = " › ".join(filter(None, [where, "Section: " + " › ".join(field["sections"])]))
             kind = {"hidden value": " (stored value of the field)", "attribute": " (kept by the field's editor)",
                     "editor": " (rich text editor)"}.get(
                 field.get("kind"), "")
@@ -614,7 +690,8 @@ def _aem_tab(result: dict, analysis: dict, target: str, searched: bool, key: tup
         for entry in analysis["aem_references"]:
             where = entry["scope"] if entry["scope"] == entry["root"] else f"{entry['scope']} · `{entry['root']}`"
             st.markdown(f"**{where}**: {entry['total']} hit(s)"
-                        + ("" if entry["status"] != "error" else f", {entry['message']}"))
+                        + ("" if entry["status"] != "error" else f", {entry['message']}")
+                        + (f" ({entry['note']})" if entry.get("note") else ""))
             if entry["hits"]:
                 st.dataframe(pd.DataFrame([
                     {"Node": h["node_path"], "Page": h["page_path"], "Component": h["resource_type"],

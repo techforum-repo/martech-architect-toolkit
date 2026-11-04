@@ -102,6 +102,10 @@ class WriteRuleTests(unittest.TestCase):
             ("POST", "/adobe/sites/pages"),
             ("delete", "/content/site/en"),
             ("PUT", "/mnt/overlay/x"),
+            ("POST", "/crx/server/crx.default/jcr%3aroot/content/site/en/jcr:content"),  # CRXDE Lite
+            ("POST", "/crx/packmgr/service/.json/etc/packages/x.zip"),  # package manager
+            ("POST", "/system/console/configMgr/com.example.Config"),  # OSGi console
+            ("POST", "/mnt/overlay/wcm/core/content/sites/createpagewizard/_jcr_content"),  # Create Page
         ]
         for method, path in saves:
             self.assertTrue(blocks_write(method, AUTHOR + path, AUTHOR), (method, path))
@@ -252,6 +256,45 @@ class NoticeTests(unittest.TestCase):
                 pass
 
         aem_browser.AemWindow(AUTHOR)._show_notice(Page())  # doesn't raise
+
+    def recording_page(self):
+        class Page:
+            shown = []
+
+            def goto(self, *args, **kwargs):
+                pass
+
+            def set_content(self, html, **kwargs):
+                Page.shown.append(html)
+
+            def is_closed(self):
+                return False
+
+            def wait_for_timeout(self, ms):
+                pass
+        return Page
+
+    def test_remembered_window_says_the_block_ends_with_the_app(self):
+        import tempfile
+        from pathlib import Path
+        Page = self.recording_page()
+        window = aem_browser.AemWindow(AUTHOR, block_saving=True, profile_dir=Path(tempfile.mkdtemp()))
+        window._show_notice(Page())
+        notice = Page.shown[-1]
+        self.assertIn("While the app is running, nothing can be saved", notice)
+        self.assertIn("saving is no longer blocked", notice)
+        self.assertNotIn("<p>Nothing can be saved", notice)
+
+    def test_window_without_a_saved_profile_keeps_the_plain_notice(self):
+        Page = self.recording_page()
+        aem_browser.AemWindow(AUTHOR, block_saving=True)._show_notice(Page())
+        self.assertIn("<p>Nothing can be saved", Page.shown[-1])
+
+    def test_disconnect_notice(self):
+        Page = self.recording_page()
+        aem_browser.AemWindow(AUTHOR)._show_unblocked(Page())
+        self.assertIn("Saving is no longer blocked", Page.shown[-1])
+        aem_browser.AemWindow(AUTHOR)._show_unblocked(None)  # no tab yet: nothing to do
 
 
 @unittest.skipUnless(browser_available(), "Chromium for Playwright is not installed")

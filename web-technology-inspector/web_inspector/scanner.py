@@ -19,7 +19,7 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
 
-from .detection import GLOBAL_NAMES
+from .detection import DETAIL_GLOBALS, GLOBAL_NAMES
 
 # Accept buttons of common consent platforms, tried in order.
 CONSENT_BUTTONS = {
@@ -60,6 +60,23 @@ GLOBALS_SCRIPT = """names => names.filter(name => {
         return name.split('.').reduce((o, k) => (o == null ? undefined : o[k]), window) !== undefined;
     } catch (e) { return false; }
 })"""
+
+
+# IDs and versions on the page (detection.DETAIL_GLOBALS): scalars only, cut
+# short. "s_c_il.version" is the first AppMeasurement instance's version.
+DETAILS_SCRIPT = """paths => {
+    const read = path => path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), window);
+    const out = {};
+    for (const path of paths) {
+        try {
+            let value = path === 's_c_il.version'
+                ? (window.s_c_il || []).map(o => o && o.version).find(Boolean)
+                : read(path);
+            if (typeof value === 'string' || typeof value === 'number') out[path] = String(value).slice(0, 200);
+        } catch (e) {}
+    }
+    return out;
+}"""
 
 
 class ScanBlocked(RuntimeError):
@@ -281,6 +298,7 @@ def scan(url: str, *, device: str = "desktop", consent: str = "none",
                 "inline_scripts": [s[:MAX_INLINE_SCRIPT_CHARS] for s in inline[:MAX_INLINE_SCRIPTS]],
                 "iframes": evaluate_all("iframe[src]", "els => els.map(e => e.src)"),
                 "globals": page.evaluate(GLOBALS_SCRIPT, sorted(GLOBAL_NAMES)),
+                "page_details": page.evaluate(DETAILS_SCRIPT, sorted(DETAIL_GLOBALS)),
                 "cookies_before_consent": cookies_before,
                 "cookies": _cookies(context),
                 "screenshot": page.screenshot(full_page=False, animations="disabled"),

@@ -73,6 +73,8 @@ def sample(url: str = PAGE, device: str = "desktop", consent: str = "accept") ->
         "scripts": [LAUNCH, ALLOY, "https://cdn.cookielaw.org/scripttemplates/otSDKStub.js"],
         "inline_scripts": ["window.adobeDataLayer = window.adobeDataLayer || [];"],
         "iframes": [],
+        "page_details": {"_satellite.property.name": "Example.com Web", "_satellite.environment.stage": "production",
+                         "_satellite.buildInfo.buildDate": "2026-10-28T14:05:11Z"},
         "globals": ["_satellite", "alloy", "__alloyNS", "adobeDataLayer", "OneTrust", "gtag", "fbq"],
         "cookies_before_consent": cookies_before if accepted else None,
         "cookies": cookies_after if accepted else cookies_before,

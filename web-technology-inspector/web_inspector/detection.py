@@ -24,7 +24,9 @@ class Technology:
 
 TECHNOLOGIES = (
     Technology("Adobe Experience Platform Web SDK", "Analytics & personalization",
-               hosts=(r"(^|\.)adobedc\.net$",), urls=(r"/alloy(\.min)?\.js(\?|$)",),
+               hosts=(r"(^|\.)adobedc\.net$",),
+               # Also Edge Network calls through a first-party domain (edge.example.com/ee/...).
+               urls=(r"/alloy(\.min)?\.js(\?|$)", r"/ee/([\w-]+/)?v\d+/(interact|collect)\?"),
                globals=("alloy", "__alloyNS")),
     Technology("Adobe Analytics", "Analytics",
                hosts=(r"\.sc\.omtrdc\.net$", r"(^|\.)2o7\.net$"),
@@ -96,9 +98,27 @@ def _matches(tech: Technology, url: str) -> bool:
     )
 
 
-def technology_for_url(url: str, *, tag_managers_only: bool = False) -> Technology | None:
-    """The first technology whose host or URL signature matches."""
-    for tech in TECHNOLOGIES:
+_custom_cache: tuple[tuple | None, tuple[Technology, ...]] = (None, ())
+
+
+def custom_technologies() -> tuple[Technology, ...]:
+    """Technologies labelled in the app (custom_signatures), as host signatures."""
+    global _custom_cache
+    from . import custom_signatures  # late: it imports config, which tests patch
+    stamp = custom_signatures.version()
+    if stamp != _custom_cache[0]:
+        _custom_cache = (stamp, tuple(
+            Technology(entry["name"], entry["category"], hosts=(r"(^|\.)" + re.escape(entry["domain"]) + "$",))
+            for entry in custom_signatures.load()
+        ))
+    return _custom_cache[1]
+
+
+def technology_for_url(url: str, *, tag_managers_only: bool = False,
+                       builtin_only: bool = False) -> Technology | None:
+    """The first technology whose host or URL signature matches; built-in
+    signatures first, then the ones labelled in the app."""
+    for tech in TECHNOLOGIES + (() if builtin_only or tag_managers_only else custom_technologies()):
         if tag_managers_only and not tech.tag_manager:
             continue
         if _matches(tech, url):
@@ -106,26 +126,133 @@ def technology_for_url(url: str, *, tag_managers_only: bool = False) -> Technolo
     return None
 
 
-def detect_technologies(requests: list[dict], scripts: list[str], page_globals: list[str]) -> list[dict]:
-    """One row per detected technology, with the evidence that matched."""
+# --- What loaded a request ------------------------------------------------------
+
+PAGE_HTML = "Page HTML"
+
+
+def loaded_by(request: dict) -> str:
+    """What made the browser send a request: a tag manager anywhere in its
+    initiator chain, else the page's HTML, else the script that asked for it."""
+    chain = [u for u in [request.get("initiator_url", "")] + list(request.get("stack_urls") or []) if u]
+    for url in chain:
+        manager = technology_for_url(url, tag_managers_only=True)
+        if manager:
+            return manager.name
+    if request.get("initiator_type") == "parser":
+        return PAGE_HTML
+    if chain:
+        parsed = urlparse(chain[0])
+        return "Script " + (parsed.hostname or "") + "/…/" + parsed.path.rsplit("/", 1)[-1]
+    return ""
+
+
+def _loaders(tech_name: str, requests: list[dict]) -> list[str]:
+    """Most common loaders first; a tag manager's own files loading each
+    other isn't news, so its own name counts only when nothing else does."""
+    counts: dict[str, int] = {}
+    for request in requests:
+        label = loaded_by(request)
+        if label:
+            counts[label] = counts.get(label, 0) + 1
+    others = {k: v for k, v in counts.items() if k != tech_name} or counts
+    return [label for label, _ in sorted(others.items(), key=lambda item: (-item[1], item[0]))][:3]
+
+
+# --- Configuration IDs and versions ---------------------------------------------
+
+# Page values read after the scan (scanner.DETAILS_SCRIPT): dotted path on
+# window -> (technology, what it is). Scalars only, cut to 200 characters.
+DETAIL_GLOBALS = {
+    "_satellite.property.name": ("Adobe Tags", "Property"),
+    "_satellite.environment.stage": ("Adobe Tags", "Environment"),
+    "_satellite.buildInfo.buildDate": ("Adobe Tags", "Build date"),
+    "adobe.target.VERSION": ("Adobe Target", "at.js version"),
+    "Visitor.version": ("Adobe Experience Cloud ID", "VisitorAPI version"),
+    "s_c_il.version": ("Adobe Analytics", "AppMeasurement version"),
+}
+
+# From request URLs: (technology, what it is, regex with the value in group 1).
+DETAIL_URLS = (
+    ("Adobe Experience Platform Web SDK", "Datastream ID", r"/ee/(?:[\w-]+/)?v\d+/(?:interact|collect)\?(?:.*&)?configId=([\w:-]+)"),
+    ("Adobe Analytics", "Report suite", r"/b/ss/([^/?]+)/"),
+    ("Adobe Target", "Client code", r"^https?://([a-z0-9-]+)\.tt\.omtrdc\.net/"),
+    ("Adobe Tags", "Library environment", r"assets\.adobedtm\.com/.*/launch-[0-9a-f]+(-staging|-development)?(?:\.min)?\.js"),
+    ("Google Tag Manager", "Container", r"googletagmanager\.com/gtm\.js\?(?:.*&)?id=(GTM-[A-Z0-9]+)"),
+    ("Google Analytics 4", "Measurement ID", r"[?&](?:id|tid)=(G-[A-Z0-9]+)"),
+    ("Meta Pixel", "Pixel ID", r"facebook\.com/tr/?\?(?:.*&)?id=(\d+)"),
+)
+
+
+def technology_details(requests: list[dict], scripts: list[str], page_details: dict | None) -> dict[str, list[str]]:
+    """{technology: ["Report suite: abc", ...]}: IDs and versions that say
+    which account, property or library version the page uses."""
+    found: dict[str, dict[str, list[str]]] = {}
+
+    def add(tech: str, what: str, value: str) -> None:
+        values = found.setdefault(tech, {}).setdefault(what, [])
+        if value and value not in values:
+            values.append(value)
+
+    for url in dict.fromkeys([r.get("url", "") for r in requests] + list(scripts)):
+        for tech, what, pattern in DETAIL_URLS:
+            match = re.search(pattern, url or "", re.IGNORECASE)
+            if not match:
+                continue
+            if what == "Report suite":
+                for suite in match.group(1).split(","):
+                    add(tech, what, suite)
+            elif what == "Library environment":
+                add(tech, what, (match.group(1) or "-production").lstrip("-").title())
+            else:
+                add(tech, what, match.group(1))
+    for path, value in (page_details or {}).items():
+        if path in DETAIL_GLOBALS and isinstance(value, (str, int, float)) and str(value).strip():
+            tech, what = DETAIL_GLOBALS[path]
+            add(tech, what, str(value).strip()[:200])
+
+    return {
+        tech: [f"{what}: {', '.join(values[:5])}" + (f" (+{len(values) - 5})" if len(values) > 5 else "")
+               for what, values in items.items() if values]
+        for tech, items in found.items()
+    }
+
+
+def detect_technologies(requests: list[dict], scripts: list[str], page_globals: list[str],
+                        page_details: dict | None = None) -> list[dict]:
+    """One row per detected technology, with the evidence that matched, what
+    loaded it, and the IDs and versions found for it."""
     resources = list(dict.fromkeys([r.get("url", "") for r in requests] + list(scripts)))
     present = set(page_globals or [])
+    details = technology_details(requests, scripts, page_details)
     results = []
 
-    for tech in TECHNOLOGIES:
+    for tech in TECHNOLOGIES + custom_technologies():
+        custom = tech not in TECHNOLOGIES
         global_hits = [name for name in tech.globals if name in present]
-        url_hits = [url for url in resources if url and _matches(tech, url)]
+        # A labelled domain only counts where no built-in signature matches.
+        url_hits = [url for url in resources if url and _matches(tech, url)
+                    and not (custom and technology_for_url(url, builtin_only=True))]
         if not global_hits and not url_hits:
             continue
+        hit_set = set(url_hits)
         results.append({
             "technology": tech.name,
             "category": tech.category,
             # A global means the library executed; a request alone means it was fetched.
-            "confidence": "Confirmed (ran on the page)" if global_hits else "Observed (loaded)",
+            "confidence": ("Labelled by you (loaded)" if custom
+                           else "Confirmed (ran on the page)" if global_hits else "Observed (loaded)"),
             "evidence": [f"window.{name}" for name in global_hits] + url_hits[:20],
+            "loaded_by": _loaders(tech.name, [r for r in requests if r.get("url") in hit_set]),
+            "details": details.get(tech.name, []),
         })
 
     return results
+
+
+def unidentified_third_parties(domains: list[dict]) -> list[dict]:
+    """Third-party domains no signature (built-in or labelled) matched."""
+    return [d for d in domains if not d["first_party"] and not d.get("technology")]
 
 
 CLIENTLIB_PROJECT = re.compile(r"/etc\.clientlibs/([A-Za-z0-9_.-]+)/")

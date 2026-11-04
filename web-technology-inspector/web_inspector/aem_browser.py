@@ -23,6 +23,7 @@ tab again. Otherwise closing the window ends the session.
 
 from __future__ import annotations
 
+import atexit
 import queue
 import shutil
 import threading
@@ -60,6 +61,20 @@ and workflows are blocked, so AEM shows an error if you try.</p></body>"""
 STAYS_OPEN = ("<p>It stays open when the app stops, and the app connects to it again on its next "
               "start, so you stay signed in.</p>")
 
+# The block lives in the app's connection to this window: a window that
+# outlives the app (remembered sign-in) is no longer protected once it stops.
+BLOCKED_WHILE_RUNNING = """<p>While the app is running, nothing can be saved to AEM from this window: saving,
+publishing, deleting and workflows are blocked, so AEM shows an error if you try.
+<b>When the app stops, this window stays open but saving is no longer blocked.</b></p>"""
+
+UNBLOCKED_NOTICE = """<!doctype html><title>AEM - saving not blocked</title>
+<body style="font: 16px system-ui, sans-serif; margin: 3rem; max-width: 40rem; color: #222">
+<h2>Saving is no longer blocked in this window</h2>
+<p>Web Technology Inspector has disconnected from this window, so it no longer blocks
+saving. The window is still signed in to AEM: anything you do in it now is saved as
+in your own browser.</p>
+<p>The block comes back when the app connects to this window again.</p></body>"""
+
 SIGNED_IN_NOTICE_OPEN = """<!doctype html><title>AEM - signed in</title>
 <body style="font: 16px system-ui, sans-serif; margin: 3rem; max-width: 40rem; color: #222">
 <h2>Signed in to AEM</h2>
@@ -67,6 +82,9 @@ SIGNED_IN_NOTICE_OPEN = """<!doctype html><title>AEM - signed in</title>
 closing it signs out.</p>
 <p>Saving isn't blocked in this window (it's off in the app): it works like your
 own browser, so take care with anything you do here by hand.</p></body>"""
+
+# Titles of this app's notices: the tab showing one is the signed-in tab.
+NOTICE_TITLES = ("AEM - signed in", "AEM - saving not blocked")
 
 _windows: dict[str, "AemWindow"] = {}
 _lock = threading.Lock()
@@ -124,7 +142,7 @@ class AemWindow:
                 and not self._closed.is_set())
 
     def capture(self, urls: list[str], term: str, timeout: int = 60, *, component: str | None = None,
-                label: str = "") -> dict:
+                label: str = "", parent_fallback: bool = False) -> dict:
         """Screenshot the fields containing term: in the first of urls that
         renders (Page Properties), or, with component (a node path), in that
         component's dialog opened in the page editor."""
@@ -132,7 +150,7 @@ class AemWindow:
             raise WindowClosed("The AEM window is closed")
         done = threading.Event()
         box: dict = {}
-        self._commands.put(("capture", (urls, term, timeout, component, label), box, done))
+        self._commands.put(("capture", (urls, term, timeout, component, label, parent_fallback), box, done))
         # Wait in short steps, so a window closed meanwhile fails at once.
         for _ in range(timeout + 60):
             if done.wait(1) or not self._thread.is_alive():
@@ -189,7 +207,7 @@ class AemWindow:
         author = self.author_base.lower().rstrip("/")
         for page in context.pages:
             try:
-                if page.url.lower().startswith(author) or page.title() == "AEM - signed in":
+                if page.url.lower().startswith(author) or page.title() in NOTICE_TITLES:
                     return page
             except PlaywrightError:
                 continue
@@ -252,6 +270,9 @@ class AemWindow:
             notice = notice.replace("<p>Web Technology Inspector takes its AEM screenshots in this window. Keep it open;\n"
                                     "closing it signs out.</p>",
                                     "<p>Web Technology Inspector takes its AEM screenshots in this window.</p>" + STAYS_OPEN)
+            notice = notice.replace("<p>Nothing can be saved to AEM from this window: saving, publishing, deleting\n"
+                                    "and workflows are blocked, so AEM shows an error if you try.</p>",
+                                    BLOCKED_WHILE_RUNNING)
         for _ in range(3):
             try:
                 page.goto("about:blank", wait_until="load", timeout=10_000)  # stops AEM's navigation
@@ -262,7 +283,17 @@ class AemWindow:
                     return
                 page.wait_for_timeout(1000)
 
+    def _show_unblocked(self, page) -> None:
+        """Before leaving a detached Chrome open: say its saving block has ended."""
+        try:
+            if page is not None and not page.is_closed():
+                page.goto("about:blank", wait_until="load", timeout=5_000)
+                page.set_content(UNBLOCKED_NOTICE, timeout=5_000)
+        except PlaywrightError:
+            pass  # the notice is a courtesy; disconnecting must not fail
+
     def _run(self) -> None:
+        page = None
         try:
             with sync_playwright() as playwright:
                 browser, context = self._open(playwright)
@@ -299,7 +330,9 @@ class AemWindow:
                         (browser or context).close()
                     elif self._close_browser:
                         _close_chrome(browser)
-                    # else: leave the detached Chrome open; the app only disconnects
+                    elif self._block_saving and self._ready.is_set() and self._error is None:
+                        # The detached Chrome stays open; disconnecting ends its saving block.
+                        self._show_unblocked(page)
         except BaseException as exc:  # noqa: BLE001 - handed to the waiting caller
             if not isinstance(exc, (WindowClosed, SignInIncomplete)):
                 log.exception("AEM window stopped")
@@ -331,12 +364,12 @@ class AemWindow:
             try:
                 if page.is_closed():
                     raise WindowClosed("The AEM window was closed")
-                urls, term, timeout, component, label = args
+                urls, term, timeout, component, label, parent_fallback = args
                 before, sent_before, failed_before = len(self.blocked), len(self.sent), len(self.failures)
                 log.info("AEM screenshot: %s, term %r", f"component {component}" if component else urls[0], term)
                 if component:
                     result = _capture_in_editor(page, self.author_base, component, term, self.blocked, timeout,
-                                                label)
+                                                label, parent_fallback)
                 else:
                     result = _capture_in_page(page, self.author_base, urls, term, self.blocked, timeout, label)
                 _log_result(result, self.failures[failed_before:])
@@ -438,10 +471,27 @@ def close_window(environment_id: str) -> None:
         window.close()
 
 
+@atexit.register
+def _disconnect_all() -> None:
+    """When the app stops normally, disconnect each window from its worker,
+    so a Chrome left open says its saving block has ended. A crash or kill
+    skips this; the sign-in notice says so up front."""
+    with _lock:
+        windows = list(_windows.values())
+    for window in windows:
+        window.close(close_browser=False)
+    for window in windows:
+        window.wait_closed(timeout=5)
+
+
 def capture_page_properties(window: AemWindow, page_path: str, term: str, label: str = "Page Properties") -> dict:
     return window.capture([properties_url(window.author_base, page_path)], term, label=label)
 
 
-def capture_component_dialog(window: AemWindow, node_path: str, term: str, label: str = "") -> dict:
-    """The component's dialog, opened in the page editor as an author would."""
-    return window.capture([], term, timeout=90, component=node_path, label=label)
+def capture_component_dialog(window: AemWindow, node_path: str, term: str, label: str = "",
+                             parent_fallback: bool = False) -> dict:
+    """The component's dialog, opened in the page editor as an author would.
+    parent_fallback: node_path has no dialog of its own (e.g. a multifield
+    item), so open the nearest component above it that the editor has."""
+    return window.capture([], term, timeout=90, component=node_path, label=label,
+                          parent_fallback=parent_fallback)

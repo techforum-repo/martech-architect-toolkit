@@ -29,5 +29,13 @@ class PreferencesTests(unittest.TestCase):
         self.assertEqual(preferences.get("mock_mode", True), True)
 
 
+class BlockSavingDefaultTests(unittest.TestCase):
+    def test_on_unless_turned_off(self):
+        from web_inspector.ui.shared import block_saving
+        self.assertTrue(block_saving())
+        preferences.set("aem_block_saving", False)
+        self.assertFalse(block_saving())
+
+
 if __name__ == "__main__":
     unittest.main()

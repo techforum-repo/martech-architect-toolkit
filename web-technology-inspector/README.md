@@ -60,11 +60,16 @@ On the **Settings** page:
      reaches that Chrome through a local debugging port (127.0.0.1 only, so
      programs on this machine could too). **Forget saved AEM sign-in** closes
      the window and deletes the profile.
-   - **Block saving in the AEM window** (off by default): refuses requests
+   - **Block saving in the AEM window** (on by default): refuses requests
      that would change content (POSTs to repository paths such as `/content`
-     or `/conf`, `/bin/` servlets like publish, any PUT or DELETE), also for
+     or `/conf`, `/bin/` servlets like publish, CRXDE Lite and the OSGi
+     console, forms under `/mnt/overlay`, any PUT or DELETE), also for
      anything done in the window by hand; each screenshot then lists what was
-     blocked. AEM's UI may fail to load some pages with it on.
+     blocked. If AEM's UI fails to load a page with it on, turn it off for
+     that session (the app itself never saves either way). The block works
+     only while the app is running: with the sign-in remembered, the window
+     stays open after the app stops and **can save again**. On a normal stop
+     the window says so; after a crash it doesn't, so close it if in doubt.
 
    The sign-in is also used for every AEM lookup. A Local Development Token can
    be used instead (optional, under the environment) for lookups and for
@@ -117,7 +122,7 @@ before anything is sent:
   code folder, taken from the page's `/etc.clientlibs/<project>/` URLs.
 - **Whole repository**: all of `/content`, `/conf` and `/apps`.
 
-QueryBuilder calls may only use an allowlist of 9 parameters
+QueryBuilder calls may only use an allowlist of 10 parameters
 (`property.operation` only as `exists`), only under those three roots, and
 return at most 100 results. Redirects are never followed with a token.
 
@@ -133,7 +138,7 @@ When **Search AEM** finds the target, the app takes a screenshot of where it is
 configured, for up to six matches:
 
 - **A page property** (the match is on a page's own node, the scanned page or
-  a parent page): Page Properties of that page.
+  a parent page, or its featured image `cq:featuredimage`): Page Properties of that page.
 - **A component property** (the match is on a component node, also inside
   experience fragments): that component instance's edit dialog, opened as an
   author would: the page (or experience fragment) in the page editor, then
@@ -143,11 +148,19 @@ configured, for up to six matches:
   Only fields inside that dialog count as matches; a dialog the editor opens
   as a page of its own (its `dialogMode`) works too. If the dialog doesn't
   open, the result says at which step and what the editor had.
+- **A node without a dialog of its own** (e.g. a multifield item such as a
+  Teaser's `actions/item0`): the dialog of the nearest component above it.
+
+Not screenshot: matches under `/conf` (policies, templates), in DAM assets or
+content fragments, and pages edited in the Universal Editor.
 
 Each screenshot shows the dialog on the tab that holds the field, with the
 field highlighted. Custom and nested tabs are followed: every tab on the way
 to the field is opened, outermost first, and the caption shows the path (for
-example "Analytics › Tracking"). Page Properties of any other page can be captured from
+example "Analytics › Tracking"). A field inside a collapsed accordion
+section is shown with that section expanded. A field hidden by a show/hide
+dropdown is listed but can't be shown without changing the dropdown, which the
+app never does. Page Properties of any other page can be captured from
 **Screenshot another page's properties**. In mock mode a sample author is used.
 
 Screenshots are taken in the AEM window you signed in with (AEM's UI only
@@ -158,13 +171,23 @@ step 3 above).
 
 To find the field, the app looks only at what fields hold, never at their
 labels or help text: field values (including the hidden value behind a code or
-rich-text editor), then value attributes an editor keeps it in (`value`,
+rich-text editor; only the chosen option of a dropdown, radio group or
+checkbox), then value attributes an editor keeps it in (`value`,
 `data-value`), then the text inside a rich text editor. Each screenshot names its tab, and says how the
 tab was found. When nothing in the dialog matches, it lists the dialog's tabs
 and whether the value is in the dialog at all. Nothing is clicked except
-dialog tabs, and nothing is typed.
+dialog tabs (accordion sections are expanded the same way), and nothing is typed.
 
 ## Scanning notes
+
+- **Identifying tools.** Each technology shows what loaded it (a tag manager
+  in the request's initiator chain, the page's HTML, or a script) and the IDs
+  and versions found for it: Web SDK datastream ID, Analytics report suites,
+  Target client code, Tags property, environment and build date, GTM
+  container, GA4 measurement ID, Meta pixel ID, and at.js, AppMeasurement and
+  VisitorAPI versions. Third-party domains no signature knows are listed
+  under **Unidentified third parties**, where you can name one; the label is
+  saved on this machine (`data/custom_signatures.json`) and used by later scans.
 
 - **Bot protection.** Sites behind Akamai, Cloudflare and similar often block
   the hidden (headless) browser; the app says so. Tick **Show browser** to scan
@@ -186,6 +209,7 @@ dialog tabs, and nothing is typed.
 | `config/` | AEM environments and website mappings (JSON, not committed) |
 | `data/inspector.db` | Scan history: technologies, domains, cookie names, consent findings. Never cookie values, inline code or screenshots |
 | `data/preferences.json` | Remembered UI choices, e.g. mock mode on or off |
+| `data/custom_signatures.json` | Technology names you gave to unidentified domains |
 | `logs/` | Rotating application log |
 
 Files are restricted to your user on Linux and macOS.
