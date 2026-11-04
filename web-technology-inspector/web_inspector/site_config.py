@@ -9,6 +9,8 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse, urlsplit
 
+from .mapping import sling_resource_path
+
 BASE = Path(__file__).resolve().parent.parent / "config"
 
 CONFIG_FILES = {
@@ -179,7 +181,7 @@ def match(url, mappings):
                 or "/"
             )
 
-            path = parsed.path or "/"
+            path = sling_resource_path(parsed.path)
 
             if (
                 parsed.hostname.lower()

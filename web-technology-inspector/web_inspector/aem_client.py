@@ -195,6 +195,8 @@ def validate_request(method, url, origins=None):
         not path.startswith("/content/")
         or not path.endswith("/jcr:content.json")
         or _unsafe_path(path)
+        # Dots before jcr:content would be Sling selectors (page.infinity.json/...).
+        or "." in path[: -len("/jcr:content.json")]
     ):
         raise AEMSecurityError(
             "Only approved content JSON endpoints "

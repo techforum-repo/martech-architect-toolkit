@@ -141,6 +141,8 @@ def loaded_by(request: dict) -> str:
             return manager.name
     if request.get("initiator_type") == "parser":
         return PAGE_HTML
+    if request.get("initiator_type") == "iframe" and chain:
+        return "Frame " + (urlparse(chain[0]).hostname or "")
     if chain:
         parsed = urlparse(chain[0])
         return "Script " + (parsed.hostname or "") + "/…/" + parsed.path.rsplit("/", 1)[-1]

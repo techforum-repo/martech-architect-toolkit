@@ -11,7 +11,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from web_inspector.scanner import BLOCK_PAGE_TITLE, AuthRequired, ScanBlocked, _desktop_user_agent, scan
+from web_inspector.scanner import (BLOCK_PAGE_TITLE, AuthRequired, ScanBlocked, _desktop_user_agent,
+                                   _frame_requests, scan)
 from web_inspector.site_credentials import browser_credentials
 
 SITE = "https://www.example.test"
@@ -54,6 +55,51 @@ def browser_available():
 
 def _raise(exc):
     raise exc
+
+
+class FakeFrame:
+    def __init__(self, url):
+        self.url = url
+
+
+class FakeRequest:
+    def __init__(self, url, frame="", method="GET"):
+        self.url, self.method, self.frame = url, method, FakeFrame(frame)
+        self.resource_type, self.timing, self.failure = "script", {"responseEnd": 12.4}, None
+        self.redirected_from = self.redirected_to = None
+
+    def response(self):
+        return None
+
+    def sizes(self):
+        return {}
+
+
+class FrameRequestTests(unittest.TestCase):
+    def test_only_requests_the_page_session_missed_are_added(self):
+        tag = "https://assets.adobedtm.com/a/b/launch-1.min.js"
+        entries = [
+            {"method": "GET", "url": SITE + "/page.html", "initiator_url": "", "stack_urls": []},
+            {"method": "GET", "url": "https://ads.other.test/frame.html", "initiator_url": tag, "stack_urls": [tag]},
+        ]
+        observed = [{"request": FakeRequest(u, f), "phase": "page_load"} for u, f in (
+            (SITE + "/page.html", SITE + "/page.html"),
+            ("https://ads.other.test/frame.html", SITE + "/page.html"),
+            ("https://ads.other.test/ad.js", "https://ads.other.test/frame.html"),
+            ("data:image/png;base64,AA", "https://ads.other.test/frame.html"),
+        )]
+        [extra] = _frame_requests(observed, entries)
+        self.assertEqual((extra["url"], extra["initiator_type"], extra["initiator_url"]),
+                         ("https://ads.other.test/ad.js", "iframe", "https://ads.other.test/frame.html"))
+        # The tag manager that added the iframe stays in the chain.
+        self.assertIn(tag, extra["stack_urls"])
+        from web_inspector.detection import loaded_by
+        self.assertEqual(loaded_by(extra), "Adobe Tags")
+
+    def test_repeated_requests_are_matched_one_for_one(self):
+        entries = [{"method": "GET", "url": "https://x.test/p.gif", "initiator_url": "", "stack_urls": []}]
+        observed = [{"request": FakeRequest("https://x.test/p.gif"), "phase": "page_load"} for _ in range(3)]
+        self.assertEqual(len(_frame_requests(observed, entries)), 2)
 
 
 class ScannerHelperTests(unittest.TestCase):
@@ -108,6 +154,43 @@ class ScannerBrowserTests(unittest.TestCase):
     def test_blocked_site(self):
         with self.assertRaises(ScanBlocked):
             scan(SITE + "/blocked.html", settle=1, prepare_context=serve)
+
+    def test_no_banner_means_nothing_after_consent(self):
+        # The page keeps polling while the scan looks for a consent banner.
+        polling = "<!doctype html><title>Poll</title><script>setInterval(() => fetch('/poll'), 30)</script>"
+        result = scan(SITE + "/poll.html", consent="accept", settle=1, prepare_context=pages({"/poll.html": polling}))
+        self.assertFalse(result["consent"]["accepted"])
+        self.assertTrue(any(r["url"].endswith("/poll") for r in result["requests"]))
+        self.assertEqual({r["phase"] for r in result["requests"]}, {"before_consent"})
+
+    def test_cross_origin_iframe_in_a_visible_browser(self):
+        # A visible browser runs a cross-origin iframe in its own process,
+        # which the page's CDP session doesn't see.
+        page = ('<!doctype html><title>Frames</title>'
+                '<iframe src="https://ads.other.test/frame.html"></iframe>')
+        frame = '<!doctype html><script src="https://ads.other.test/ad.js"></script>'
+        try:
+            result = scan(SITE + "/frames.html", settle=1, show_browser=True,
+                          prepare_context=pages({"/frames.html": page, "/frame.html": frame}))
+        except Exception as exc:  # noqa: BLE001
+            if "display" in str(exc).lower() or "headed" in str(exc).lower():
+                self.skipTest("No display for a visible browser")
+            raise
+        [ad] = [r for r in result["requests"] if r["url"] == "https://ads.other.test/ad.js"]
+        self.assertEqual(ad["initiator_url"], "https://ads.other.test/frame.html")
+
+
+def pages(html_by_path):
+    """Fixture pages by path on any host; everything else is a small script."""
+    def prepare(context):
+        def handle(route):
+            path = "/" + route.request.url.split("/", 3)[3]
+            if path in html_by_path:
+                route.fulfill(status=200, content_type="text/html", body=html_by_path[path])
+            else:
+                route.fulfill(status=200, content_type="application/javascript", body="1;")
+        context.route("**/*", handle)
+    return prepare
 
 
 EXPECTED_AUTH = "Basic " + base64.b64encode(b"qa-user:s3cret").decode()

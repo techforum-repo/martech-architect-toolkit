@@ -139,6 +139,63 @@ def _accept_consent(page) -> str | None:
     return None
 
 
+def _request_entry(request, phase: str, entries: list[dict]) -> dict:
+    """An entry like on_request's for a request only Playwright saw. Its
+    initiator is the frame it came from; that frame's own loader (e.g. a tag
+    manager that added the iframe) goes in the chain."""
+    try:
+        frame_url = request.frame.url
+    except PlaywrightError:
+        frame_url = ""  # e.g. a worker's request
+    frame_doc = next((e for e in entries if e["url"] == frame_url), None)
+    try:
+        response = request.response()
+        sizes = request.sizes()
+    except PlaywrightError:
+        response, sizes = None, {}
+    timing = request.timing or {}
+    redirect_from, redirect_to = request.redirected_from, request.redirected_to
+    return {
+        "url": request.url,
+        "domain": urlparse(request.url).hostname or "",
+        "method": request.method,
+        "type": request.resource_type.title().replace("Xhr", "XHR"),
+        "initiator_type": "iframe" if frame_url else "other",
+        "initiator_url": frame_url,
+        "stack_urls": [u for u in [frame_url] + ([frame_doc["initiator_url"]] + frame_doc["stack_urls"]
+                                                  if frame_doc else []) if u],
+        "redirect_from": redirect_from.url if redirect_from else "",
+        "redirected_to": redirect_to.url if redirect_to else "",
+        "status": response.status if response else None,
+        "mime_type": (response.headers.get("content-type", "").split(";")[0] if response else ""),
+        "bytes": int(sizes.get("responseBodySize", 0) + sizes.get("responseHeadersSize", 0)) if response else 0,
+        "duration_ms": round(timing["responseEnd"]) if timing.get("responseEnd", -1) >= 0 else None,
+        "failed": request.failure or "",
+        "phase": phase,
+    }
+
+
+def _frame_requests(observed: list[dict], entries: list[dict]) -> list[dict]:
+    """Requests Playwright saw that the page's CDP session didn't (those of
+    out-of-process iframes and workers), matched by method and URL so each
+    request counts once."""
+    unmatched: dict[tuple[str, str], int] = {}
+    for entry in entries:
+        key = (entry["method"], entry["url"])
+        unmatched[key] = unmatched.get(key, 0) + 1
+    extra = []
+    for record in observed:
+        request = record["request"]
+        if urlparse(request.url).scheme not in ("http", "https"):
+            continue
+        key = (request.method, request.url)
+        if unmatched.get(key):
+            unmatched[key] -= 1
+            continue
+        extra.append(_request_entry(request, record["phase"], entries))
+    return extra
+
+
 def scan(url: str, *, device: str = "desktop", consent: str = "none",
          show_browser: bool = False, timeout: int = 45, settle: int = 6,
          http_credentials: dict | None = None, prepare_context=None,
@@ -244,6 +301,13 @@ def scan(url: str, *, device: str = "desktop", consent: str = "none",
             cdp.on("Network.loadingFinished", on_finished)
             cdp.on("Network.loadingFailed", on_failed)
 
+            # The CDP session above sees the page's own process only. With a
+            # visible browser, cross-origin iframes run in processes of their
+            # own (site isolation), so Playwright's events, which cover every
+            # frame, fill in what it missed (see _frame_requests).
+            observed: list[dict] = []
+            context.on("request", lambda request: observed.append({"request": request, "phase": state["phase"]}))
+
             response = page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
             main_status = response.status if response else None
             title = page.title()
@@ -272,13 +336,18 @@ def scan(url: str, *, device: str = "desktop", consent: str = "none",
                 cookies_before = _cookies(context)
                 # Switch the label before clicking: the click itself starts
                 # the requests consent unlocks.
+                marks = (len(entries), len(observed))
                 state["phase"] = "after_consent"
                 platform = _accept_consent(page)
                 consent_result.update(platform=platform, accepted=bool(platform))
                 if platform:
                     _settle(page, settle)
                 else:
-                    state["phase"] = "before_consent"  # nothing was accepted
+                    # Nothing was accepted: what loaded while the banner was
+                    # searched for also loaded without consent.
+                    state["phase"] = "before_consent"
+                    for record in entries[marks[0]:] + observed[marks[1]:]:
+                        record["phase"] = "before_consent"
 
             def evaluate_all(selector, script):
                 return page.locator(selector).evaluate_all(script)
@@ -293,7 +362,7 @@ def scan(url: str, *, device: str = "desktop", consent: str = "none",
                 "device": device,
                 "user_agent": page.evaluate("navigator.userAgent"),
                 "consent": consent_result,
-                "requests": entries,
+                "requests": entries + _frame_requests(observed, entries),
                 "scripts": evaluate_all("script[src]", "els => els.map(e => e.src)"),
                 "inline_scripts": [s[:MAX_INLINE_SCRIPT_CHARS] for s in inline[:MAX_INLINE_SCRIPTS]],
                 "iframes": evaluate_all("iframe[src]", "els => els.map(e => e.src)"),

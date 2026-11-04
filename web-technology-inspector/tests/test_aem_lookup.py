@@ -65,6 +65,7 @@ class TestQueryBuilderValidation(unittest.TestCase):
             "/content/site/en/page.json",
             "/apps/site/components/page.infinity.json",
             "/content/site/en/page.infinity.json",
+            "/content/site/en/page.infinity.json/x/jcr:content.json",  # selectors, then a suffix
         ):
             with self.subTest(path=path):
                 with self.assertRaises(AEMSecurityError):

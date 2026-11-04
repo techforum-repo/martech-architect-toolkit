@@ -23,6 +23,22 @@ class InvestigationTests(unittest.TestCase):
         self.assertEqual(result["aem_page"]["content_path"], "/content/example/us/en/campaigns/spring-sale")
         self.assertIn("Vanity", result["aem_page"]["method"])
 
+    def test_selectors_and_suffixes_are_not_part_of_the_page(self):
+        from web_inspector.mapping import resolve
+        for path, expected in (
+            ("/us/en/products.html", "/content/example/us/en/products"),
+            ("/us/en/products.mobile.html", "/content/example/us/en/products"),
+            ("/us/en/products.infinity.json/x/y", "/content/example/us/en/products"),
+            ("/us/en/products", "/content/example/us/en/products"),
+            ("/us/en.html", "/content/example/us/en"),
+        ):
+            with self.subTest(path=path):
+                content = resolve("https://www.example.com" + path, aem_mock.MAPPING, aem_mock.ENVIRONMENT)
+                self.assertEqual(content["content_path"], expected)
+        # And the page is still found through them.
+        result = run("https://www.example.com/us/en/products.infinity.json/x")
+        self.assertEqual(result["aem_page"]["content_path"], "/content/example/us/en/products")
+
     def test_unknown_page(self):
         result = run("https://www.example.com/us/en/missing.html")
         self.assertEqual(result["stages"]["aem"]["status"], "not_found")

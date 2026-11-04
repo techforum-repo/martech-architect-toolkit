@@ -3,6 +3,22 @@
 from urllib.parse import urlparse, quote
 
 
+def sling_resource_path(path):
+    """The page part of a published URL path, as Sling reads it: the first
+    segment with a dot ends it; the rest of that segment is selectors and
+    extension (page.mobile.html) and what follows is a suffix. So
+    /us/en.html is /us/en, and page.infinity.json/x never reaches AEM as
+    part of a page path (it would read the whole tree, not one node)."""
+    segments = (path or "/").split("/")
+    if any(part in (".", "..") for part in segments):
+        raise ValueError("Invalid content path")
+    for index, segment in enumerate(segments):
+        if "." in segment:
+            segments = segments[:index] + [segment.split(".", 1)[0]]
+            break
+    return "/".join(segments).rstrip("/") or "/"
+
+
 def resolve(url, mapping, environment):
     parsed = urlparse(url)
 
@@ -24,7 +40,7 @@ def resolve(url, mapping, environment):
         or "/"
     )
 
-    path = parsed.path or "/"
+    path = sling_resource_path(parsed.path)
 
     if (
         prefix != "/"
@@ -40,15 +56,6 @@ def resolve(url, mapping, environment):
         if prefix != "/"
         else path
     ).rstrip("/")
-
-    if suffix.endswith(".html"):
-        suffix = suffix[:-5]
-
-    if any(
-        part in (".", "..")
-        for part in suffix.split("/")
-    ):
-        raise ValueError("Invalid content path")
 
     content = (
         mapping["content_root"].rstrip("/")
