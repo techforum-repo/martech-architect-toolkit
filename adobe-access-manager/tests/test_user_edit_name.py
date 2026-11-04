@@ -42,7 +42,7 @@ def _goto(at: AppTest, page: str) -> None:
     assert not at.exception, (page, list(at.exception))
 
 
-def test_update_user_name_renames_the_mock_user_directly():
+def test_update_user_name_renames_the_mock_user_directly(temp_db):  # it also updates the cache DB
     result = update_user_name("existing.user@example.com", "New", "Name")
     assert result["success"] is True
     assert client.users["existing.user@example.com"]["first_name"] == "New"
@@ -53,7 +53,7 @@ def test_edit_name_from_search_detail_updates_the_displayed_name(temp_db):
     at = AppTest.from_file(APP_PATH)
     at.run(timeout=30)
     _goto(at, "User search")
-    [w for w in at.text_area if w.label == "User email(s)"][0].set_value("existing.user@example.com").run(timeout=30)
+    [w for w in at.text_area if w.label == "User email(s)"][0].set_value("existing.user@example.com")
     [b for b in at.button if b.label == "Search Adobe"][0].click().run(timeout=30)
     assert not at.exception
     assert any("Existing User" in m.value for m in at.markdown)
@@ -72,7 +72,7 @@ def test_adobe_id_user_cannot_be_renamed(temp_db):
     at = AppTest.from_file(APP_PATH)
     at.run(timeout=30)
     _goto(at, "User search")
-    [w for w in at.text_area if w.label == "User email(s)"][0].set_value("adobe.id.user@example.com").run(timeout=30)
+    [w for w in at.text_area if w.label == "User email(s)"][0].set_value("adobe.id.user@example.com")
     [b for b in at.button if b.label == "Search Adobe"][0].click().run(timeout=30)
     assert not at.exception
 

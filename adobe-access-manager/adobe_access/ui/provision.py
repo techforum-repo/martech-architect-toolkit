@@ -586,8 +586,8 @@ def _render_step_review() -> None:
             f"- **Create {to_create} user(s)**\n"
             f"- **Add {summary['assignments']} group assignment(s)**\n"
             + (f"- **Remove {summary['removals']} group assignment(s)**\n" if summary["removals"] else "")
-            + f"\nThis makes real changes in Adobe. Running the same request again is safe — "
-            f"only missing changes are applied."
+            + "\nThis makes real changes in Adobe. Running the same request again is safe — "
+            "only missing changes are applied."
         )
         execute_confirm = st.checkbox(
             "I confirm this will make real changes in Adobe and I have reviewed the preview above.",

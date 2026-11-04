@@ -29,7 +29,7 @@ def test_saving_a_valid_country_code_persists_it(temp_db):
     at.run(timeout=30)
     _goto_settings(at)
 
-    [w for w in at.text_input if w.label == "Default country"][0].set_value("ca").run(timeout=30)
+    [w for w in at.text_input if w.label == "Default country"][0].set_value("ca")
     [b for b in at.button if b.label == "Save settings"][0].click().run(timeout=30)
     assert not at.exception
     assert not at.error
@@ -44,7 +44,7 @@ def test_an_invalid_country_code_is_rejected_and_not_saved(temp_db, bad_value):
     at.run(timeout=30)
     _goto_settings(at)
 
-    [w for w in at.text_input if w.label == "Default country"][0].set_value(bad_value).run(timeout=30)
+    [w for w in at.text_input if w.label == "Default country"][0].set_value(bad_value)
     [b for b in at.button if b.label == "Save settings"][0].click().run(timeout=30)
     assert not at.exception
     assert any("two-letter country code" in e.value for e in at.error)
