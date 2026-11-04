@@ -14,6 +14,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
+node -e "process.exit(+process.versions.node.split('.')[0] >= 22 ? 0 : 1)"
+if errorlevel 1 (
+    for /f %%v in ('node -v') do echo [ERROR] Node.js 22 or later is required ^(found %%v^).
+    exit /b 1
+)
+
 where npm >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] npm is not installed.

@@ -13,6 +13,11 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! node -e "process.exit(+process.versions.node.split('.')[0] >= 22 ? 0 : 1)"; then
+  echo "[ERROR] Node.js 22 or later is required (found $(node -v))."
+  exit 1
+fi
+
 if ! command -v npm >/dev/null 2>&1; then
   echo "[ERROR] npm is not installed."
   exit 1

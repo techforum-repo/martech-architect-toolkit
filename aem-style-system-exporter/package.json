@@ -13,7 +13,7 @@
     "export:fe": "node --env-file=.env src/css-extractor.js",
     "export:map": "node src/style-mapper.js",
     "export:excel": "node src/excel-exporter.js",
-    "check": "node --check src/exporter.js && node --check src/master-exporter.js && node --check src/css-extractor.js && node --check src/style-mapper.js && node --check src/excel-exporter.js && node --check src/snapshot.js && node --check src/diff.js && node --check src/history.js && node --check src/compare.js && node --check src/workbook.js",
+    "check": "node --check src/exporter.js && node --check src/master-exporter.js && node --check src/css-extractor.js && node --check src/style-mapper.js && node --check src/excel-exporter.js && node --check src/snapshot.js && node --check src/diff.js && node --check src/history.js && node --check src/compare.js && node --check src/workbook.js && node --check src/ui-server.js",
     "export:history": "node src/history.js",
     "compare": "node src/compare.js",
     "test": "node --test test/*.test.js"

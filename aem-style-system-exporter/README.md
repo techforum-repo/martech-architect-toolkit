@@ -32,7 +32,9 @@ Every export is saved as a snapshot in `output/history/<environment>/<time>/` (t
 
 Each row shows who last modified the template or policy and when, where AEM records it. The first export of an environment has nothing to compare with yet.
 
-Compare any two saved exports, e.g. stage with prod:
+Compare any two saved exports, e.g. stage with prod, on the **compare page**: run `compare.bat` (Windows) or `sh compare.sh`. It opens in the browser at `http://127.0.0.1:8510/` (`COMPARE_UI_PORT` to change; the next free port is used if taken). Pick a before and an after export (by default the previous and latest export of the newest environment), filter by area, change type or text, and download the comparison as Excel. The page runs on this machine only and only reads saved exports. Stop it with Ctrl+C.
+
+The same on the command line:
 
 ```
 npm run compare -- --list
@@ -40,6 +42,6 @@ npm run compare -- author-p1-e2.adobeaemcloud.com~1 author-p1-e2.adobeaemcloud.c
 npm run compare -- <stage-host> <prod-host>
 ```
 
-Each argument is a folder, `<environment>/<time>` as `--list` prints it, `<environment>` for its latest export, or `<environment>~1` for the one before (`~2`, … further back). The result is written to `output/comparisons/` as a workbook and JSON. A comparison with an incomplete export says so: missing data then shows as removals.
+`compare.bat` / `sh compare.sh` accept the same arguments. Each argument is a folder, `<environment>/<time>` as `--list` prints it, `<environment>` for its latest export, or `<environment>~1` for the one before (`~2`, … further back). The result is written to `output/comparisons/` as a workbook and JSON. A comparison with an incomplete export says so: missing data then shows as removals.
 
 Security: never commit `.env`. Treat output as internal configuration data. Review before sharing.

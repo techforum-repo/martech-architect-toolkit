@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Compare Exports</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #5d6676; --line: #dfe3ea;
+  --accent: #183a5b; --accent-text: #ffffff; --focus: #2f6fb3;
+  --added: #1e7d4f; --added-bg: #e5f4ec; --removed: #b3261e; --removed-bg: #fbe9e7;
+  --changed: #8a5a00; --changed-bg: #fdf3dc; --note-bg: #eef3fb;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15181e; --panel: #1d2129; --text: #e6e9ef; --muted: #9aa3b2; --line: #313744;
+    --accent: #3d6b99; --accent-text: #ffffff; --focus: #7fb0e6;
+    --added: #6fcf97; --added-bg: #183326; --removed: #f2998e; --removed-bg: #3a1d1b;
+    --changed: #f0c36a; --changed-bg: #3a2f17; --note-bg: #1f2a3a;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { background: var(--accent); color: var(--accent-text); padding: 14px 24px; }
+header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+header p { margin: 2px 0 0; opacity: .85; font-size: 13px; }
+main { max-width: 1400px; margin: 0 auto; padding: 20px 24px 40px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.pick { display: grid; grid-template-columns: 1fr auto 1fr auto; gap: 12px; align-items: end; }
+label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .03em; }
+select, input[type=search] { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: var(--text); font: inherit; }
+button { font: inherit; border-radius: 6px; padding: 8px 14px; cursor: pointer; border: 1px solid var(--line);
+  background: var(--panel); color: var(--text); }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+button:disabled { opacity: .5; cursor: default; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.actions { display: flex; gap: 8px; }
+.swap { padding: 8px 10px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.card { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--panel); }
+.card h3 { margin: 0 0 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.badge { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.Added { color: var(--added); background: var(--added-bg); }
+.Removed { color: var(--removed); background: var(--removed-bg); }
+.Changed { color: var(--changed); background: var(--changed-bg); }
+.notes { margin: 12px 0 0; padding: 0; list-style: none; }
+.notes li { background: var(--note-bg); border-radius: 6px; padding: 8px 12px; margin-top: 6px; }
+.compared { color: var(--muted); margin: 0 0 12px; }
+.filters { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-bottom: 10px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { padding: 4px 10px; border-radius: 999px; font-size: 13px; }
+.chip[aria-pressed=true] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.search { flex: 1; min-width: 200px; }
+.count { color: var(--muted); font-size: 13px; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+table { width: 100%; border-collapse: collapse; background: var(--panel); }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+th { position: sticky; top: 0; background: var(--panel); font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+td.item { font-weight: 600; word-break: break-word; }
+td.details { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12.5px; word-break: break-word; }
+td.who { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+.empty { text-align: center; color: var(--muted); padding: 32px 16px; }
+.error { color: var(--removed); }
+@media (max-width: 760px) {
+  main { padding: 16px; }
+  .pick { grid-template-columns: 1fr; }
+  .swap { justify-self: start; }
+  /* Each change as a card: label, then value. */
+  .table-wrap { border: 0; overflow: visible; }
+  table, tbody, tr, td { display: block; width: 100%; }
+  thead { display: none; }
+  tr { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 10px; padding: 6px 0; }
+  td { border: 0; padding: 4px 12px; }
+  td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; font-weight: 600;
+    color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+  td.who { white-space: normal; }
+  td.who:empty { display: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Compare exports</h1>
+  <p>What changed in templates, policies, styles and theme CSS between two saved exports.</p>
+</header>
+<main>
+  <section class="panel">
+    <div class="pick">
+      <div><label for="before">Before</label><select id="before"></select></div>
+      <button class="swap" id="swap" title="Swap before and after" aria-label="Swap before and after">⇄</button>
+      <div><label for="after">After</label><select id="after"></select></div>
+      <div class="actions">
+        <button class="primary" id="compare">Compare</button>
+        <button id="download" disabled>Download Excel</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="result" hidden>
+    <p class="compared" id="compared"></p>
+    <div class="cards" id="cards"></div>
+    <ul class="notes" id="notes"></ul>
+    <section class="panel" style="margin-top:16px">
+      <div class="filters">
+        <div class="chips" id="areaChips" role="group" aria-label="Areas"></div>
+        <div class="chips" id="changeChips" role="group" aria-label="Change types"></div>
+        <div class="search"><input type="search" id="search" placeholder="Filter by name, path, class or value" aria-label="Filter changes"></div>
+        <span class="count" id="count"></span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Area</th><th>Change</th><th>Item</th><th>Details</th><th>Last modified</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </section>
+  </section>
+
+  <p class="empty" id="message"></p>
+</main>
+<script>
+const AREAS = ["Template", "Template policy", "Policy", "Style", "Theme token", "Style CSS"];
+const CHANGES = ["Added", "Removed", "Changed"];
+const $ = id => document.getElementById(id);
+const el = (tag, props = {}, ...children) => {
+  const node = Object.assign(document.createElement(tag), props);
+  for (const child of children) node.append(child);  // text, never HTML
+  return node;
+};
+let exports = [], current = null;
+const filters = { areas: new Set(), changes: new Set(), text: "" };
+
+function when(iso) {
+  return iso ? iso.slice(0, 16).replace("T", " ") + " UTC" : "";
+}
+
+function optionLabel(item) {
+  // To the second: two exports can fall in the same minute.
+  const time = item.createdAt ? item.createdAt.slice(0, 19).replace("T", " ") + " UTC" : item.id;
+  return time + (item.complete ? "" : "  (incomplete)");
+}
+
+function fillSelect(select) {
+  select.replaceChildren();
+  const byEnv = new Map();
+  for (const item of exports) byEnv.set(item.environment, [...(byEnv.get(item.environment) || []), item]);
+  for (const [environment, items] of byEnv) {
+    const group = el("optgroup", { label: environment });
+    for (const item of items) group.append(el("option", { value: item.key }, optionLabel(item)));
+    select.append(group);
+  }
+}
+
+function message(text, isError = false) {
+  $("message").textContent = text;
+  $("message").className = "empty" + (isError ? " error" : "");
+}
+
+async function getJson(url) {
+  const response = await fetch(url);
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || response.statusText);
+  return body;
+}
+
+function query() {
+  return new URLSearchParams({ before: $("before").value, after: $("after").value }).toString();
+}
+
+async function compare() {
+  if (!$("before").value || !$("after").value) return;
+  location.hash = query();
+  message("Comparing…");
+  $("result").hidden = true;
+  try {
+    current = await getJson("/api/compare?" + query());
+    message("");
+    render();
+    $("download").disabled = false;
+  } catch (error) {
+    message("Couldn't compare: " + error.message, true);
+  }
+}
+
+function render() {
+  const { comparedWith: a, current: b, counts, notes, rows } = current;
+  $("compared").textContent = `${a.environment}, ${when(a.createdAt)}  →  ${b.environment}, ${when(b.createdAt)}`;
+
+  $("cards").replaceChildren(...AREAS.filter(area => counts[area]).map(area => el("div", { className: "card" },
+    el("h3", {}, area),
+    el("div", { className: "badges" }, ...CHANGES.filter(c => counts[area][c])
+      .map(c => el("span", { className: "badge " + c }, `${counts[area][c]} ${c.toLowerCase()}`))))));
+  $("notes").replaceChildren(...notes.map(note => el("li", {}, note)));
+
+  const present = AREAS.filter(area => counts[area]);
+  chips($("areaChips"), present, filters.areas);
+  chips($("changeChips"), CHANGES.filter(c => rows.some(r => r.change === c)), filters.changes);
+  $("result").hidden = false;
+  if (!rows.length) message("No changes between these exports.");
+  renderRows();
+}
+
+function chips(container, values, selected) {
+  for (const value of [...selected]) if (!values.includes(value)) selected.delete(value);
+  container.replaceChildren(...values.map(value => {
+    const chip = el("button", { className: "chip", type: "button" }, value);
+    chip.setAttribute("aria-pressed", selected.has(value));
+    chip.onclick = () => {
+      selected.has(value) ? selected.delete(value) : selected.add(value);
+      chip.setAttribute("aria-pressed", selected.has(value));
+      renderRows();
+    };
+    return chip;
+  }));
+}
+
+function renderRows() {
+  const text = filters.text.toLowerCase();
+  const shown = current.rows.filter(row =>
+    (!filters.areas.size || filters.areas.has(row.area)) &&
+    (!filters.changes.size || filters.changes.has(row.change)) &&
+    (!text || [row.item, row.details, row.modifiedBy].join(" ").toLowerCase().includes(text)));
+  const cell = (label, props, ...children) => {
+    const td = el("td", props, ...children);
+    td.dataset.label = label;  // shown above the value on narrow screens
+    return td;
+  };
+  $("rows").replaceChildren(...shown.map(row => el("tr", {},
+    cell("Area", {}, row.area),
+    cell("Change", {}, el("span", { className: "badge " + row.change }, row.change)),
+    cell("Item", { className: "item" }, row.item),
+    cell("Details", { className: "details" }, row.details),
+    cell("Last modified", { className: "who" }, [row.modifiedBy, row.modifiedAt ? String(row.modifiedAt).slice(0, 16) : ""]
+      .filter(Boolean).join(" · ")))));
+  if (current.rows.length && !shown.length) {
+    $("rows").append(el("tr", {}, el("td", { colSpan: 5, className: "empty" }, "No changes match these filters.")));
+  }
+  $("count").textContent = `${shown.length} of ${current.rows.length} change(s)`;
+}
+
+function pickDefaults() {
+  const fromHash = new URLSearchParams(location.hash.slice(1));
+  const keys = new Set(exports.map(e => e.key));
+  if (keys.has(fromHash.get("before")) && keys.has(fromHash.get("after"))) {
+    $("before").value = fromHash.get("before");
+    $("after").value = fromHash.get("after");
+    return true;
+  }
+  // The newest export, against the previous one of the same environment.
+  const latest = exports[0];
+  const previous = exports.find(e => e.environment === latest.environment && e.key !== latest.key);
+  $("after").value = latest.key;
+  if (previous) $("before").value = previous.key;
+  return Boolean(previous);
+}
+
+async function init() {
+  try {
+    exports = await getJson("/api/exports");
+  } catch (error) {
+    return message("Couldn't list saved exports: " + error.message, true);
+  }
+  if (!exports.length) {
+    $("compare").disabled = true;
+    return message("No saved exports yet. Run export.bat (or sh export.sh): each export is saved and can be compared here.");
+  }
+  fillSelect($("before"));
+  fillSelect($("after"));
+  if (pickDefaults()) {
+    compare();
+  } else {
+    message("Only one export saved so far. The next export can be compared with it, or pick another environment's export.");
+  }
+}
+
+$("compare").onclick = compare;
+$("swap").onclick = () => {
+  [$("before").value, $("after").value] = [$("after").value, $("before").value];
+  compare();
+};
+$("download").onclick = () => { location.href = "/api/compare.xlsx?" + query(); };
+$("search").oninput = event => { filters.text = event.target.value; if (current) renderRows(); };
+for (const id of ["before", "after"]) $(id).onchange = () => { $("download").disabled = true; };
+init();
+</script>
+</body>
+</html>
