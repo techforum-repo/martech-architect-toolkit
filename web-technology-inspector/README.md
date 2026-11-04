@@ -113,6 +113,13 @@ before anything is sent:
 | Vanity URLs | QueryBuilder search on `sling:vanityPath` when the mapping misses |
 | References | QueryBuilder full-text search, in one of two scopes (below) |
 
+The page path is read from the URL as Sling reads it: selectors, extension and
+suffix aren't part of it, so `/us/en/page.mobile.html` and `/us/en.html` find
+`page` and `en` (a section's root page matches its `/us/en` mapping), and
+selectors are never sent on to AEM. If a lookup fails (for example the sign-in
+expired midway), the search says so instead of reporting "not found"; text
+components are read 100 at a time, up to 1,000, and any not compared are named.
+
 **Search scope** for references:
 
 - **This page and what it uses** (default): the page's own components
@@ -191,10 +198,12 @@ dialog tabs (accordion sections are expanded the same way), and nothing is typed
 
 - **Bot protection.** Sites behind Akamai, Cloudflare and similar often block
   the hidden (headless) browser; the app says so. Tick **Show browser** to scan
-  with a visible window, which is usually allowed.
+  with a visible window, which is usually allowed. Requests from cross-origin
+  iframes (ads, video, some consent tools) are recorded either way, with the
+  iframe shown as what loaded them.
 - **Consent.** Recognised banners: OneTrust, Cookiebot, TrustArc, Didomi,
   Usercentrics, Quantcast and Sourcepoint. If none is found, the scan says that
-  nothing was accepted. Consent tools and tag managers loading before consent
+  nothing was accepted, and every request counts as before consent. Consent tools and tag managers loading before consent
   are marked as expected; other third parties are flagged for review.
 - **First party.** A domain counts as first party when it is the page's domain
   or a subdomain of it, or is listed under **Also first party** on the website

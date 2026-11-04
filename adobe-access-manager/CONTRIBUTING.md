@@ -27,6 +27,9 @@ Adobe credentials unless you're specifically working on the live UMAPI client.
   case (see `tests/test_app_widget_state.py`) over a manual click-through description — widget
   state bugs (stale selections, collapsed forms) are exactly the class of bug that only shows up
   under `AppTest`, not in a plain unit test of business logic.
+- In an `AppTest`, set the fields of an `st.form` and click its submit button in the same run:
+  `field.set_value(x)` without `.run()`, then `submit.click().run()`. Current Streamlit discards
+  an unsubmitted form value on an extra run in between (a real browser never makes that run).
 - Business logic (`provisioning.py`, `client.py`, `users.py`, `templates.py`, `errors.py`,
   `retry.py`) is intentionally Streamlit-free — keep it that way so it stays independently
   testable. UI-only concerns belong in `adobe_access/ui/*.py`.
