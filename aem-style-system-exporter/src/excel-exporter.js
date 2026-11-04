@@ -2,6 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const ExcelJS = require('exceljs');
+const {changesSheet, sheet} = require('./workbook');
 
 const root = path.resolve(__dirname, '..');
 const dir = path.join(root, 'output');
@@ -19,6 +20,7 @@ const validation = read('validation-report.json', {});
 const fe = read('fe-data.json', null);
 const mapping = read('style-css-mapping.json', null);
 const master = read('master-status.json', {warnings: []});
+const changes = read('changes.json', null);
 
 const lookup = new Map(
   (mapping?.rows || []).map(r => [
@@ -38,80 +40,6 @@ for (const r of refs) {
 
   if (!usage.has(p)) usage.set(p, new Set());
   usage.get(p).add(t);
-}
-
-// ExcelJS writes strings as literal text cells (never formulas), so no
-// formula-injection escaping is needed; prefixing "'" would show up in the cell.
-function cellValue(v) {
-  return v == null ? '' : v;
-}
-
-function sheet(book, name, headers, rows) {
-  const ws = book.addWorksheet(name, {
-    views: [{state:'frozen',ySplit:1}]
-  });
-
-  ws.columns = headers.map(h => ({
-    header: h,
-    key: h,
-    width: /Actual FE CSS/.test(h) ? 80
-      : /Templates/.test(h) ? 48
-      : /Context|Source|CSS Class/.test(h) ? 42
-      : 25
-  }));
-
-  for (const row of rows) {
-    ws.addRow(row.map(cellValue));
-  }
-
-  ws.getRow(1).height = 28;
-
-  ws.getRow(1).eachCell(c => {
-    c.font = {
-      bold: true,
-      color: {argb:'FFFFFFFF'}
-    };
-    c.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: {argb:'FF183A5B'}
-    };
-    c.alignment = {
-      wrapText: true,
-      vertical: 'middle'
-    };
-  });
-
-  ws.autoFilter = {
-    from: {row:1,column:1},
-    to: {row:1,column:headers.length}
-  };
-
-  for(let i=2;i<=ws.rowCount;i++) {
-    const row = ws.getRow(i);
-    row.height = 32;
-
-    row.eachCell(c => {
-      c.alignment = {
-        wrapText: true,
-        vertical: 'top'
-      };
-      c.font = {
-        name: 'Aptos',
-        size: 10,
-        color: {argb:'FF16603D'}
-      };
-      if(i%2===0) {
-        c.fill = {
-          type: 'pattern',
-          pattern: 'solid',
-          fgColor: {argb:'FFF0F5FA'}
-        };
-      }
-    });
-  }
-
-  console.log(`[EXCEL] ${name}: ${rows.length} rows`);
 }
 
 function cssText(rules) {
@@ -241,10 +169,16 @@ async function main() {
     policyRows
   );
 
+  // What changed since the previous export of this environment (history.js).
+  if (changes) {
+    changesSheet(book, changes);
+  }
+
   if(fe) {
     const usedNames = new Set([
       'Style System',
-      'Policy Summary'
+      'Policy Summary',
+      'Changes'
     ]);
 
     // Only themes whose CSS was actually loaded get a token sheet.

@@ -46,6 +46,7 @@ function main() {
     'validation-report.json',
     'fe-data.json',
     'style-css-mapping.json',
+    'changes.json',
     'EWP_Style_System_Export.xlsx'
   ]) {
     remove(f);
@@ -117,6 +118,12 @@ function main() {
       createdAt: new Date().toISOString()
     }, null, 2)
   );
+
+  // Keep this run in output/history and list what changed since the last one.
+  if (run('history.js') !== 0) {
+    warnings.push('Change history unavailable; the workbook has no Changes sheet');
+    remove('changes.json');
+  }
 
   if (run('excel-exporter.js') !== 0) {
     throw Error('Excel export failed');

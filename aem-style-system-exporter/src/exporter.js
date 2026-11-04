@@ -81,13 +81,21 @@ function isTemplateNode(resourcePath) {
 }
 
 function getChildNames(data, parentPath = "") {
-  // Template policy mappings (cq:policy) live only under <template>/policies;
+  // Template policy mappings (cq:policy) live only under <template>/policies,
+  // and its title and status in <template>/jcr:content (that node only);
   // structure, initial content and thumbnails are not needed.
   if (isTemplateNode(parentPath)) {
-    const policies = data.policies;
-    return policies && typeof policies === "object" && !Array.isArray(policies)
-      ? ["policies"]
-      : [];
+    return ["jcr:content", "policies"].filter(name => {
+      const child = data[name];
+      return child && typeof child === "object" && !Array.isArray(child);
+    });
+  }
+
+  if (
+    parentPath.endsWith("/jcr:content") &&
+    isTemplateNode(parentPath.slice(0, -"/jcr:content".length))
+  ) {
+    return [];
   }
 
   return Object.entries(data)
@@ -412,8 +420,18 @@ function collectTemplatesAndReferences(policies) {
       !relative.includes("/") &&
       node["jcr:primaryType"] === "cq:Template"
     ) {
+      const content = nodes.get(resourcePath + "/jcr:content") || {};
+
       templates.push({
         path: resourcePath,
+        name: relative,
+        title: content["jcr:title"] ?? null,
+        // "enabled", "disabled" or "draft" in the template console.
+        status: content.status ?? null,
+        lastModified:
+          content["cq:lastModified"] ?? content["jcr:lastModified"] ?? null,
+        lastModifiedBy:
+          content["cq:lastModifiedBy"] ?? content["jcr:lastModifiedBy"] ?? null,
         properties: getProperties(node)
       });
     }
