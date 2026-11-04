@@ -93,7 +93,7 @@ def test_is_special_permission_detects_the_underscore_prefix():
     assert is_special_permission("_org_admin")
     assert is_special_permission("_admin_12345")
     assert not is_special_permission("AEM-PROD-AUTHORS")
-    assert not is_special_permission("BSC-CJA-USERS")
+    assert not is_special_permission("ACME-CJA-USERS")
 
 
 def test_is_special_permission_also_detects_human_readable_role_phrases():

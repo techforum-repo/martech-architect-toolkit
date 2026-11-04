@@ -11,7 +11,7 @@ def test_nested_user_object_is_not_used_as_email():
             "firstname": "albin",
             "lastname": "issac",
             "type": "federatedID",
-            "groups": ["bsc-cja-admin", "AEM Users - Author"],
+            "groups": ["acme-cja-admin", "AEM Users - Author"],
         }
     }
     user = normalize_user(payload)
@@ -20,14 +20,14 @@ def test_nested_user_object_is_not_used_as_email():
     assert user["last_name"] == "issac"
     assert user["identity_type"] == "federatedID"
     assert user["status"] == "Active"
-    assert user["groups"] == {"bsc-cja-admin", "AEM Users - Author"}
+    assert user["groups"] == {"acme-cja-admin", "AEM Users - Author"}
 
 
 def test_custom_memberships_match_cache_case_insensitively():
-    user = {"groups": {"bsc-cja-admin", "BSC-CJA-REPORTING-US-DEFAULT"}}
+    user = {"groups": {"acme-cja-admin", "ACME-CJA-REPORTING-US-DEFAULT"}}
     cache = pd.DataFrame([
-        {"adobe_group_name": "BSC-CJA-admin", "display_name": "CJA Admin", "system": "CJA"},
-        {"adobe_group_name": "bsc-cja-reporting-us-default", "display_name": "CJA Reporting US", "system": "CJA"},
+        {"adobe_group_name": "ACME-CJA-admin", "display_name": "CJA Admin", "system": "CJA"},
+        {"adobe_group_name": "acme-cja-reporting-us-default", "display_name": "CJA Reporting US", "system": "CJA"},
     ])
     result = membership_table(user, cache)
     assert len(result) == 2

@@ -15,15 +15,15 @@ def test_normalize_lookup_email() -> None:
 def test_membership_table_enriches_cached_groups() -> None:
     cached = pd.DataFrame([
         {
-            "adobe_group_name": "BSC-CJA-reporting-US-default",
+            "adobe_group_name": "ACME-CJA-reporting-US-default",
             "display_name": "CJA Reporting US Default",
             "system": "CJA",
         }
     ])
-    user = {"groups": {"BSC-CJA-reporting-US-default", "Uncached Group"}}
+    user = {"groups": {"ACME-CJA-reporting-US-default", "Uncached Group"}}
     result = membership_table(user, cached)
     assert len(result) == 1
-    cached_row = result[result["adobe_group_name"] == "BSC-CJA-reporting-US-default"].iloc[0]
+    cached_row = result[result["adobe_group_name"] == "ACME-CJA-reporting-US-default"].iloc[0]
     assert cached_row["display_name"] == "CJA Reporting US Default"
     assert bool(cached_row["cached"]) is True
 
@@ -37,8 +37,8 @@ def test_user_export_table_is_flat() -> None:
         "status": "active",
     }
     memberships = pd.DataFrame([
-        {"display_name": "CJA User", "system": "CJA", "adobe_group_name": "BSC-CJA-user", "cached": True}
+        {"display_name": "CJA User", "system": "CJA", "adobe_group_name": "ACME-CJA-user", "cached": True}
     ])
     result = user_export_table(user, memberships)
     assert result.loc[0, "email"] == "person@example.com"
-    assert result.loc[0, "adobe_group_name"] == "BSC-CJA-user"
+    assert result.loc[0, "adobe_group_name"] == "ACME-CJA-user"

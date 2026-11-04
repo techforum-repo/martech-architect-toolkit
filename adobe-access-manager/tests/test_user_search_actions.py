@@ -19,10 +19,10 @@ def temp_db(tmp_path, monkeypatch):
 
 
 def test_membership_table_returns_only_cached_custom_groups_case_insensitively():
-    user = {"groups": {"BSC-CJA-Users", "_product_admin_internal"}}
+    user = {"groups": {"ACME-CJA-Users", "_product_admin_internal"}}
     cache = pd.DataFrame([
         {
-            "adobe_group_name": "bsc-cja-users",
+            "adobe_group_name": "acme-cja-users",
             "display_name": "CJA Users",
             "system": "CJA",
             "description": "",
@@ -31,7 +31,7 @@ def test_membership_table_returns_only_cached_custom_groups_case_insensitively()
         }
     ])
     result = membership_table(user, cache)
-    assert result["adobe_group_name"].tolist() == ["bsc-cja-users"]
+    assert result["adobe_group_name"].tolist() == ["acme-cja-users"]
     assert result["display_name"].tolist() == ["CJA Users"]
 
 
@@ -160,7 +160,7 @@ def test_user_export_contains_only_user_and_custom_group_columns():
         {
             "display_name": "CJA Users",
             "system": "CJA",
-            "adobe_group_name": "bsc-cja-users",
+            "adobe_group_name": "acme-cja-users",
             "cached": True,
         }
     ])
@@ -169,4 +169,4 @@ def test_user_export_contains_only_user_and_custom_group_columns():
         "email", "first_name", "last_name", "identity_type", "status",
         "group_display_name", "system", "adobe_group_name",
     ]
-    assert result.iloc[0]["adobe_group_name"] == "bsc-cja-users"
+    assert result.iloc[0]["adobe_group_name"] == "acme-cja-users"

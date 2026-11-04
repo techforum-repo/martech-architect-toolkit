@@ -5,19 +5,19 @@ from adobe_access.users import build_copy_access_preview
 
 def test_copy_preview_marks_existing_and_new_memberships():
     cached = pd.DataFrame([
-        {"display_name": "CJA User", "system": "CJA", "adobe_group_name": "BSC-CJA-user"},
-        {"display_name": "AEM Author", "system": "AEM", "adobe_group_name": "BSC-AEM-author"},
+        {"display_name": "CJA User", "system": "CJA", "adobe_group_name": "ACME-CJA-user"},
+        {"display_name": "AEM Author", "system": "AEM", "adobe_group_name": "ACME-AEM-author"},
     ])
-    source = {"groups": {"BSC-CJA-user", "BSC-AEM-author"}}
+    source = {"groups": {"ACME-CJA-user", "ACME-AEM-author"}}
     target_users = [
-        {"groups": {"bsc-cja-user"}},
+        {"groups": {"acme-cja-user"}},
         None,
     ]
     result = build_copy_access_preview(
         source,
         target_users,
         ["one@example.com", "two@example.com"],
-        ["BSC-CJA-user", "BSC-AEM-author"],
+        ["ACME-CJA-user", "ACME-AEM-author"],
         cached,
     )
     assert len(result) == 4
