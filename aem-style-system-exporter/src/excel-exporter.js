@@ -40,9 +40,10 @@ for (const r of refs) {
   usage.get(p).add(t);
 }
 
-function safe(v) {
-  const s = v == null ? '' : String(v);
-  return /^[\s]*[=+\-@]/.test(s) ? "'" + s : s;
+// ExcelJS writes strings as literal text cells (never formulas), so no
+// formula-injection escaping is needed; prefixing "'" would show up in the cell.
+function cellValue(v) {
+  return v == null ? '' : v;
 }
 
 function sheet(book, name, headers, rows) {
@@ -60,7 +61,7 @@ function sheet(book, name, headers, rows) {
   }));
 
   for (const row of rows) {
-    ws.addRow(row.map(safe));
+    ws.addRow(row.map(cellValue));
   }
 
   ws.getRow(1).height = 28;
@@ -246,7 +247,8 @@ async function main() {
       'Policy Summary'
     ]);
 
-    for(const theme of fe.themes) {
+    // Only themes whose CSS was actually loaded get a token sheet.
+    for(const theme of fe.loadedThemes ?? fe.themes) {
       let name = `Theme - ${theme}`
         .slice(0,31)
         .replace(/[\\/*?:\[\]]/g,'_');

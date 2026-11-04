@@ -15,6 +15,8 @@ const maxDepth = Number(process.env.MAX_DEPTH || 30);
 const maxNodes = Number(process.env.MAX_NODES || 15000);
 const requestTimeout = Number(process.env.REQUEST_TIMEOUT || 30000);
 const progressInterval = Number(process.env.PROGRESS_INTERVAL || 25);
+const fetchDepth = Number(process.env.FETCH_DEPTH || 3);
+const concurrency = Number(process.env.CONCURRENCY || 4);
 
 if (!author || !token || !policyRoot || !templateRoot) {
   throw new Error("Missing required AEM configuration in .env");
@@ -37,7 +39,9 @@ for (const [name, value] of [
   ["MAX_DEPTH", maxDepth],
   ["MAX_NODES", maxNodes],
   ["REQUEST_TIMEOUT", requestTimeout],
-  ["PROGRESS_INTERVAL", progressInterval]
+  ["PROGRESS_INTERVAL", progressInterval],
+  ["FETCH_DEPTH", fetchDepth],
+  ["CONCURRENCY", concurrency]
 ]) {
   if (!Number.isInteger(value) || value <= 0) {
     throw new Error(`${name} must be a positive integer`);
@@ -52,7 +56,6 @@ const policyPaths = new Set();
 
 let requests = 0;
 let truncated = false;
-let currentSection = "";
 
 function log(level, message) {
   const time = new Date().toLocaleTimeString("en-US", {
@@ -72,7 +75,21 @@ function printProgress() {
 
 
 
+function isTemplateNode(resourcePath) {
+  if (!resourcePath.startsWith(templateRoot + "/")) return false;
+  return !resourcePath.slice(templateRoot.length + 1).includes("/");
+}
+
 function getChildNames(data, parentPath = "") {
+  // Template policy mappings (cq:policy) live only under <template>/policies;
+  // structure, initial content and thumbnails are not needed.
+  if (isTemplateNode(parentPath)) {
+    const policies = data.policies;
+    return policies && typeof policies === "object" && !Array.isArray(policies)
+      ? ["policies"]
+      : [];
+  }
+
   return Object.entries(data)
     .filter(([key, value]) => {
       if (
@@ -124,15 +141,27 @@ function getPolicyPath(resourcePath) {
   return policyRoot + "/" + parts.slice(0, index + 1).join("/");
 }
 
-async function requestJson(resourcePath) {
+// Encode each path segment so names containing #, ?, %, spaces etc. address
+// the right resource. ":" is kept readable (jcr:content); Sling decodes either.
+function encodePath(resourcePath) {
+  return resourcePath
+    .split("/")
+    .map(segment => encodeURIComponent(segment).replace(/%3A/gi, ":"))
+    .join("/");
+}
+
+// Fetches resourcePath as Sling JSON `levels` deep. Returns { data, levels }:
+// Sling answers 300 when a deep tree exceeds its result limit, in which case
+// this falls back to a single level.
+async function requestJson(resourcePath, levels = 1) {
   const url = new URL(
-    `${author}${resourcePath}.1.json`
+    `${author}${encodePath(resourcePath)}.${levels}.json`
   );
 
   const start = Date.now();
   requests++;
 
-  log("GET", resourcePath);
+  log("GET", `${resourcePath} (.${levels}.json)`);
 
   const response = await fetch(url, {
     headers: {
@@ -143,6 +172,12 @@ async function requestJson(resourcePath) {
   });
 
   const elapsed = Date.now() - start;
+
+  if (response.status === 300 && levels > 1) {
+    await response.body?.cancel();
+    log("INFO", `Tree too large at .${levels}.json; retrying one level`);
+    return requestJson(resourcePath, 1);
+  }
 
   if (!response.ok) {
     log("ERROR", `HTTP ${response.status} | ${resourcePath}`);
@@ -157,44 +192,61 @@ async function requestJson(resourcePath) {
 
   log("OK", `HTTP ${response.status} | ${elapsed} ms`);
 
-  return data;
+  return { data, levels };
 }
 
-async function crawl(resourcePath, depth = 0) {
-  if (visited.has(resourcePath)) return;
+function registerNode(resourcePath, node, section) {
+  nodes.set(resourcePath, node);
+  section.count++;
 
-  if (nodes.size >= maxNodes || depth > maxDepth) {
-    truncated = true;
-    log("LIMIT", `Traversal limit reached at ${resourcePath}`);
-    return;
+  const policyPath = getPolicyPath(resourcePath);
+
+  if (policyPath && !policyPaths.has(policyPath)) {
+    policyPaths.add(policyPath);
+    log("POLICY", `Found ${policyPath}`);
   }
 
+  if (nodes.size % progressInterval === 0) {
+    printProgress();
+  }
+}
+
+// Fetches one node several levels deep and registers every node in the
+// response whose children are fully known. Nodes at the deepest returned
+// level may have unlisted children, so they are returned for their own fetch.
+async function visit({ path: resourcePath, depth }, section) {
+  if (visited.has(resourcePath)) return [];
   visited.add(resourcePath);
 
   try {
-    const data = await requestJson(resourcePath);
+    const { data, levels } =
+      await requestJson(resourcePath, fetchDepth);
 
-    nodes.set(resourcePath, data);
+    const frontier = [];
 
-    const policyPath = getPolicyPath(resourcePath);
+    const expand = (nodePath, node, nodeDepth, level) => {
+      if (nodeDepth > maxDepth || section.count >= maxNodes) {
+        truncated = true;
+        log("LIMIT", `Traversal limit reached at ${nodePath}`);
+        return;
+      }
 
-    if (policyPath && !policyPaths.has(policyPath)) {
-      policyPaths.add(policyPath);
-      log("POLICY", `Found ${policyPath}`);
-    }
+      if (level === levels) {
+        frontier.push({ path: nodePath, depth: nodeDepth });
+        return;
+      }
 
-    if (nodes.size % progressInterval === 0) {
-      printProgress();
-    }
+      if (level > 0) visited.add(nodePath);
+      registerNode(nodePath, node, section);
 
-    const children = getChildNames(data, resourcePath);
+      for (const child of getChildNames(node, nodePath)) {
+        expand(`${nodePath}/${child}`, node[child], nodeDepth + 1, level + 1);
+      }
+    };
 
-    for (const child of children) {
-      await crawl(
-        `${resourcePath}/${child}`,
-        depth + 1
-      );
-    }
+    expand(resourcePath, data, depth, 0);
+
+    return frontier;
 
   } catch (error) {
     errors.push({
@@ -203,13 +255,83 @@ async function crawl(resourcePath, depth = 0) {
     });
 
     log("FAILED", `${resourcePath}: ${error.message}`);
+
+    return [];
   }
+}
+
+// Crawls one root with up to CONCURRENCY requests in flight. MAX_NODES
+// applies per root, so a large policy tree cannot starve the template scan.
+async function crawl(rootPath) {
+  const section = { count: 0 };
+  const queue = [{ path: rootPath, depth: 0 }];
+  const pending = new Set();
+
+  while (queue.length || pending.size) {
+    while (queue.length && pending.size < concurrency) {
+      const task = visit(queue.shift(), section)
+        .then(children => queue.push(...children))
+        .finally(() => pending.delete(task));
+
+      pending.add(task);
+    }
+
+    if (pending.size) await Promise.race(pending);
+  }
+}
+
+// Parallel fetches finish in any order; rebuild repository (document) order
+// so styles and groups keep the order authors defined in AEM.
+function restoreRepositoryOrder(rootPaths) {
+  const ordered = new Map();
+
+  const walk = resourcePath => {
+    const node = nodes.get(resourcePath);
+    if (!node || ordered.has(resourcePath)) return;
+
+    ordered.set(resourcePath, node);
+
+    for (const child of getChildNames(node, resourcePath)) {
+      walk(`${resourcePath}/${child}`);
+    }
+  };
+
+  rootPaths.forEach(walk);
+
+  for (const [resourcePath, node] of nodes) {
+    if (!ordered.has(resourcePath)) ordered.set(resourcePath, node);
+  }
+
+  nodes.clear();
+  for (const [resourcePath, node] of ordered) nodes.set(resourcePath, node);
+}
+
+// A failed root request (bad token, wrong URL/path) means nothing useful
+// was exported, so fail hard instead of reporting "completed with issues".
+function assertRootLoaded(rootPath) {
+  if (nodes.has(rootPath)) return;
+
+  const error =
+    errors.find(item => item.path === rootPath)?.error || "not retrieved";
+
+  const hint = /HTTP 40[13]\b/.test(error)
+    ? " - check AEM_LOCAL_TOKEN (it may have expired)"
+    : "";
+
+  throw new Error(`Could not read ${rootPath}: ${error}${hint}`);
 }
 
 function collectPolicies() {
   const policies = new Map();
 
-  for (const policyPath of policyPaths) {
+  // Follow repository order (nodes is reordered after the parallel crawl),
+  // not the order in which policies happened to be discovered.
+  const orderedPolicyPaths = [
+    ...[...nodes.keys()].filter(p => policyPaths.has(p)),
+    ...[...policyPaths].filter(p => !nodes.has(p))
+  ];
+
+  for (const policyPath of orderedPolicyPaths) {
     const relative = policyPath.slice(policyRoot.length + 1);
     const segments = relative.split("/");
 
@@ -343,7 +465,7 @@ async function verifyPolicyReferences(references) {
 
   for (const policyPath of unresolvedPaths) {
     try {
-      await requestJson(policyPath);
+      await requestJson(policyPath, 0);
 
       results.set(policyPath, {
         status: "Exists in AEM - Not Exported"
@@ -412,22 +534,26 @@ async function main() {
   console.log("Template root:", templateRoot);
   console.log("Token:         Configured (value hidden)");
   console.log("Max depth:    ", maxDepth);
-  console.log("Max nodes:    ", maxNodes);
+  console.log("Max nodes:    ", maxNodes, "(per root)");
+  console.log("Fetch depth:  ", fetchDepth);
+  console.log("Concurrency:  ", concurrency);
   console.log("=".repeat(60));
 
   log("START", "Export started");
 
-  currentSection = "policies";
   log("SCAN", "Scanning policies...");
   await crawl(policyRoot);
+  assertRootLoaded(policyRoot);
 
   printProgress();
 
-  currentSection = "templates";
   log("SCAN", "Scanning templates...");
   await crawl(templateRoot);
+  assertRootLoaded(templateRoot);
 
   printProgress();
+
+  restoreRepositoryOrder([policyRoot, templateRoot]);
 
   log("PROCESS", "Extracting policies and styles...");
   const policies = collectPolicies();
@@ -450,17 +576,26 @@ async function main() {
     policy => !used.has(policy.path)
   );
 
+  // Any template reference that did not resolve to an exported policy means
+  // the export is incomplete (policy outside the scanned root) or the
+  // template configuration is broken (policy missing in AEM).
+  const missingReferences = references.filter(ref => !ref.found);
+
   const validation = {
-    complete: errors.length === 0 && !truncated,
+    complete:
+      errors.length === 0 &&
+      !truncated &&
+      missingReferences.length === 0,
     errors,
     truncated,
-    missingReferences: references.filter(ref => !ref.found),
+    missingReferences,
     counts: {
       nodes: nodes.size,
       requests,
       policies: policies.length,
       templates: templates.length,
       references: references.length,
+      missingReferences: missingReferences.length,
       referencedPolicies: referencedStyles.length,
       unreferencedPolicies: unreferencedPolicies.length
     }
@@ -484,7 +619,9 @@ async function main() {
   console.log("Policies discovered: ", policies.length);
   console.log("Templates discovered:", templates.length);
   console.log("Policy references:   ", references.length);
+  console.log("Missing references:  ", missingReferences.length);
   console.log("Errors:              ", errors.length);
+  console.log("Truncated:           ", truncated);
   console.log("Duration:            ", duration, "seconds");
   console.log("Output directory:    ", path.join(root, "output"));
   console.log("=".repeat(60));

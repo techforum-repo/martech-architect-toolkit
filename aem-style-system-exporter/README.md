@@ -12,6 +12,8 @@ Node.js 22+ and access to the existing AEM exporter `src/exporter.js`.
 
 The existing `src/exporter.js` must be copied from your current working project; this package intentionally does not replace it. It must produce policies.json, policy-usage.json, and validation-report.json in `output/`, and return 0 or 2 for completed exports.
 
+Crawling: MAX_NODES applies to the policy root and the template root separately. Templates are scanned only under `{template}/policies`. FETCH_DEPTH (default 3) sets how many levels each request returns, and CONCURRENCY (default 4) how many requests run in parallel; lower them if AEM Author is under load. Any unresolved template policy reference marks the export incomplete (exit code 2); see `missingReferences` in validation-report.json.
+
 FE_BUILD=false uses `dist/clientlib-{theme}/{theme}.css`. FE_BUILD=true runs FE_BUILD_COMMAND in FE_PROJECT_PATH first. Optional FE_SHARED_CSS accepts comma-separated paths relative to FE_PROJECT_PATH (or absolute paths).
 
 The generated Excel has Style System, Policy Summary, and a Theme tab per selected theme. CSS extraction reads compiled CSS custom properties. It does NOT extract original Sass `$variables`, nor guarantee browser-computed styles. For those, a separate SCSS source analysis or browser evaluation is needed.

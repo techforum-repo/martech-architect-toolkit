@@ -26,6 +26,7 @@ const records = [];
 const warnings = [];
 const tokenRows = [];
 const rules = [];
+const loadedThemes = [];
 
 
 function category(name) {
@@ -216,7 +217,9 @@ function main() {
       }
     }
 
-    if (!found) {
+    if (found) {
+      loadedThemes.push(theme);
+    } else {
       warnings.push(`Theme ${theme} has no usable CSS`);
     }
   }
@@ -225,6 +228,7 @@ function main() {
     out,
     JSON.stringify({
       themes,
+      loadedThemes,
       records,
       warnings,
       tokens: tokenRows,

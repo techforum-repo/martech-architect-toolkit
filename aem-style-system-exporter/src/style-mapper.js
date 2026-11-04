@@ -14,22 +14,41 @@ const fe = read('fe-data.json');
 const policies = read('policies.json');
 
 
-function classifySelector(selector, targetClass) {
+// Classes inside :not(...) exclude elements rather than match them,
+// so they must not count as a style's CSS rule.
+function isInsideNot(node) {
+  for (let p = node.parent; p; p = p.parent) {
+    if (p.type === 'pseudo' && p.value.toLowerCase() === ':not') {
+      return true;
+    }
+  }
+  return false;
+}
+
+function matchingClasses(container) {
+  const classes = new Set();
+
+  container.walkClasses(node => {
+    if (!isInsideNot(node)) classes.add(node.value);
+  });
+
+  return classes;
+}
+
+// styleClasses: every class the style applies. A selector is "Direct" when it
+// needs no classes beyond those, e.g. `.a.b` for a style with classes "a b".
+function classifySelector(selector, targetClass, styleClasses) {
   try {
     const results = [];
 
     selectorParser(selectors => {
       selectors.each(selectorNode => {
-        const classes = new Set();
-
-        selectorNode.walkClasses(node => {
-          classes.add(node.value);
-        });
+        const classes = matchingClasses(selectorNode);
 
         if (!classes.has(targetClass)) return;
 
         const additionalClasses = [...classes]
-          .filter(name => name !== targetClass);
+          .filter(name => !styleClasses.has(name));
 
         results.push({
           selector: selectorNode.toString(),
@@ -55,11 +74,11 @@ const classIndex = new Map();
 
 for (const rule of fe.rules) {
   try {
-    const classes = new Set();
+    let classes = new Set();
 
-    selectorParser(selectors =>
-      selectors.walkClasses(c => classes.add(c.value))
-    ).processSync(rule.selector);
+    selectorParser(selectors => {
+      classes = matchingClasses(selectors);
+    }).processSync(rule.selector);
 
     for (const c of classes) {
       const key = `${rule.theme}\u0000${c}`;
@@ -100,14 +119,18 @@ for (const policy of policies) {
         : String(style.classes || '')
     ).split(/\s+/).filter(Boolean);
 
-    for (const theme of fe.themes) {
+    const styleClasses = new Set(classes);
+
+    // Themes without loaded CSS are left unmapped so Excel shows
+    // "FE unavailable" rather than a misleading "Not Found".
+    for (const theme of fe.loadedThemes ?? fe.themes) {
 
 		const matches = [
 		  ...new Map(
 			classes.flatMap(targetClass =>
 			  (classIndex.get(`${theme}\u0000${targetClass}`) || [])
 				.flatMap(rule =>
-				  classifySelector(rule.selector, targetClass)
+				  classifySelector(rule.selector, targetClass, styleClasses)
 					.map(classification => ({
 					  ...rule,
 					  selector: classification.selector,
