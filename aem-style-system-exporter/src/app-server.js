@@ -50,6 +50,7 @@ function environments(root) {
       machine: run.meta.machine || "",
       warnings: run.meta.warnings || [],
       reasons: run.meta.reasons || [],
+      findings: run.meta.findings || [],
       error: run.meta.error || null,
       workbook: Boolean(store.workbookFile(run.dir))
     }))

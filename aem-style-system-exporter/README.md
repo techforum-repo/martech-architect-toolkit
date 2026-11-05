@@ -109,8 +109,9 @@ output/environments/
 output/comparisons/                  comparisons made on the command line
 ```
 
-A run's status is **complete**, **incomplete** (AEM data partly missing, see
-the validation report), **failed** (with the error) or **running**. Only
+A run's status is **complete** (everything was read), **incomplete** (some
+nodes couldn't be read, or a crawl limit was reached; the run says which),
+**failed** (with the error), **interrupted** or **running**. Only
 complete and incomplete runs are compared. The last `HISTORY_KEEP` runs (default
 20) are kept per environment, workbooks included. The large front-end data
 files are removed once the workbook is written (`KEEP_RAW_DATA=true` keeps them);
@@ -139,19 +140,24 @@ changed once finished, so people can export at the same time.
   (`jcr:content`) and its policy mappings (`policies`). Structure and initial
   content aren't read.
 - A template policy reference that doesn't resolve to an exported policy is
-  checked in AEM the way AEM looks it up: the site's policy root, then
-  `/conf/global`, `/apps` and `/libs`. One found there is listed as
+  looked up the way AEM does: the site's configuration, its parent
+  configurations (`/conf/site/us` falls back to `/conf/site`), then
+  `/conf/global`, `/apps/conf` and `/libs/conf`. One found there is listed as
   inherited (`outsideRootReferences` in `validation-report.json`; its styles
-  aren't in this export). One found nowhere marks the export incomplete
-  (exit code 2; `missingReferences`), and the log names it:
+  aren't in this export).
+- One found nowhere is a **finding about AEM**, not a problem with the
+  export: the template points to a policy that doesn't exist, so AEM uses no
+  policy for that component. The run is still complete; the finding is listed
+  with it (console `[FINDING]`, under the run in the app,
+  `missingReferences` in `validation-report.json`), and the log names it:
 
   ```
   [CHECK] Missing in AEM: /conf/site/settings/wcm/policies/site/components/page/policy_123
           Used by template article › (page): the template points to a policy that doesn't exist. …
   ```
 
-  AEM answers 404 for such a policy; that's the finding, not a failed export.
-  Fix the template's policy for that component in the template editor, or
+  AEM answers 404 for such a policy, which is why the report shows a 404 for
+  it. Fix the template's policy for that component in the template editor, or
   ignore it if the component isn't used.
 - In a template's policy mappings, AEM's JSON also shows the mapped policy's
   `jcr:content` and `cq:styleGroups`; they aren't nodes of the template

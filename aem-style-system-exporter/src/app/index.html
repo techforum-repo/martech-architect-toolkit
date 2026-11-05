@@ -283,10 +283,13 @@ async function api(path, body) {
   return data;
 }
 
-// Why a run is incomplete, and its warnings, as a short list (or nothing).
+// Why a run is incomplete, its warnings, and findings about AEM itself
+// (e.g. templates pointing to a policy that doesn't exist), as short lists.
 function reasonList(run) {
   const items = [...(run.reasons || []), ...(run.warnings || [])];
-  return items.length ? el("ul", { className: "reasons" }, ...items.map(item => el("li", {}, item))) : "";
+  const findings = (run.findings || []).map(item => el("li", {}, "Finding in AEM: " + item));
+  if (!items.length && !findings.length) return "";
+  return el("ul", { className: "reasons" }, ...items.map(item => el("li", {}, item)), ...findings);
 }
 
 function statusBadge(status, title = "") {
@@ -393,9 +396,10 @@ function renderJob(job) {
   if (job.status !== "running" && job.runKey) {
     const [envId, runId] = job.runKey.split("/");
     const run = envById(envId)?.runs.find(r => r.id === runId);
-    if (run && (run.reasons?.length || run.warnings?.length)) {
-      result.push(el("div", { style: "flex-basis:100%" },
-        el("strong", {}, run.status === "incomplete" ? "Incomplete because:" : "Warnings:"), reasonList(run)));
+    if (run && (run.reasons?.length || run.warnings?.length || run.findings?.length)) {
+      const heading = run.status === "incomplete" ? "Incomplete because:"
+        : run.reasons?.length || run.warnings?.length ? "Warnings:" : "Complete. Found in AEM:";
+      result.push(el("div", { style: "flex-basis:100%" }, el("strong", {}, heading), reasonList(run)));
     }
     if (run?.workbook) result.push(el("a", { href: "/api/workbook?" + new URLSearchParams({ run: job.runKey }) }, "Download workbook"));
     if (run?.changes?.comparedWith && envById(envId)?.runs.some(r => r.id === run.changes.comparedWith)) {

@@ -509,7 +509,17 @@ async function verifyPolicyReferences(references) {
   // A relative cq:policy (site/components/x/policy_1) is looked up by AEM in
   // the site's configuration first, then in these: a policy found there is
   // inherited, not missing.
-  const inheritedRoots = ["/conf/global", "/apps", "/libs"].map(root => root + "/settings/wcm/policies");
+  // AEM's lookup after the site's own configuration: its parent
+  // configurations (/conf/a/b falls back to /conf/a), then the defaults
+  // /conf/global, /apps/conf and /libs/conf (and the older /apps, /libs).
+  const siteConf = policyRoot.replace(/\/settings\/wcm\/policies$/, "");
+  const parentConfs = [];
+  for (let conf = path.posix.dirname(siteConf); conf !== "/conf" && conf.startsWith("/conf/"); conf = path.posix.dirname(conf)) {
+    parentConfs.push(conf);
+  }
+  const inheritedRoots = [...parentConfs, "/conf/global", "/apps/conf", "/libs/conf", "/apps", "/libs"]
+    .filter(conf => conf !== siteConf)
+    .map(root => root + "/settings/wcm/policies");
   const rawFor = policyPath => references.find(ref => ref.resolvedPolicyPath === policyPath)?.rawReference || "";
 
   const exists = async candidate => {
@@ -653,10 +663,12 @@ async function main() {
   const outsideRootReferences = references.filter(ref => !ref.found && !missingReferences.includes(ref));
 
   const validation = {
+    // Complete means everything was read. A template pointing to a policy
+    // that isn't in AEM is a finding about AEM, listed in missingReferences
+    // and reported with the run, not data the export missed.
     complete:
       errors.length === 0 &&
-      !truncated &&
-      missingReferences.length === 0,
+      !truncated,
     errors,
     truncated,
     missingReferences,
@@ -692,7 +704,7 @@ async function main() {
   console.log("Policies discovered: ", policies.length);
   console.log("Templates discovered:", templates.length);
   console.log("Policy references:   ", references.length);
-  console.log("Missing references:  ", missingReferences.length);
+  console.log("Policies not in AEM: ", missingReferences.length, "template reference(s) (see the [CHECK] lines)");
   console.log("Inherited / outside: ", outsideRootReferences.length);
   console.log("Errors:              ", errors.length);
   console.log("Truncated:           ", truncated);
