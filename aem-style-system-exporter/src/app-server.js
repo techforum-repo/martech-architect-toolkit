@@ -49,6 +49,7 @@ function environments(root) {
       counts: run.meta.counts || null,
       machine: run.meta.machine || "",
       warnings: run.meta.warnings || [],
+      reasons: run.meta.reasons || [],
       error: run.meta.error || null,
       workbook: Boolean(store.workbookFile(run.dir))
     }))

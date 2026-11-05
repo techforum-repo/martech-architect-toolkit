@@ -57,6 +57,8 @@ a { color: var(--focus); }
 .status.incomplete, .status.warnings { color: var(--changed); background: var(--changed-bg); }
 .status.failed, .status.cancelled, .status.interrupted { color: var(--removed); background: var(--removed-bg); }
 .status.running { color: var(--muted); background: var(--neutral-bg); }
+ul.reasons { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size: 12.5px; }
+ul.reasons li { word-break: break-word; }
 pre.log { background: var(--log-bg); color: var(--log-text); border-radius: 8px; padding: 12px; margin: 12px 0 0;
   max-height: 420px; overflow: auto; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; word-break: break-all; }
 .pair { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: end; }
@@ -281,6 +283,12 @@ async function api(path, body) {
   return data;
 }
 
+// Why a run is incomplete, and its warnings, as a short list (or nothing).
+function reasonList(run) {
+  const items = [...(run.reasons || []), ...(run.warnings || [])];
+  return items.length ? el("ul", { className: "reasons" }, ...items.map(item => el("li", {}, item))) : "";
+}
+
 function statusBadge(status, title = "") {
   const badge = el("span", { className: "status " + status }, status);
   if (title) badge.title = title;
@@ -325,7 +333,8 @@ function renderRunTab() {
     fact("Author", profile.values.AEM_AUTHOR_URL || "—"),
     fact("Settings file", profile.file),
     fact("Token", token),
-    fact("Last run", ...(last ? [statusBadge(last.status, last.error || ""), " " + when(last.createdAt)] : ["none yet"])));
+    fact("Last run", ...(last ? [statusBadge(last.status, last.error || ""), " " + when(last.createdAt), reasonList(last)]
+                               : ["none yet"])));
   const running = state.jobs.find(job => job.profile === profile.key && job.status === "running");
   $("runStart").disabled = Boolean(running);
   $("runStart").textContent = running ? "Running…" : "Run export";
@@ -384,6 +393,10 @@ function renderJob(job) {
   if (job.status !== "running" && job.runKey) {
     const [envId, runId] = job.runKey.split("/");
     const run = envById(envId)?.runs.find(r => r.id === runId);
+    if (run && (run.reasons?.length || run.warnings?.length)) {
+      result.push(el("div", { style: "flex-basis:100%" },
+        el("strong", {}, run.status === "incomplete" ? "Incomplete because:" : "Warnings:"), reasonList(run)));
+    }
     if (run?.workbook) result.push(el("a", { href: "/api/workbook?" + new URLSearchParams({ run: job.runKey }) }, "Download workbook"));
     if (run?.changes?.comparedWith && envById(envId)?.runs.some(r => r.id === run.changes.comparedWith)) {
       const show = el("button", { type: "button" }, `Show ${run.changes.total} change(s) since the previous run`);
@@ -443,7 +456,8 @@ function renderTimeline() {
       el("td", { className: "pick" }, pick("before", run, run.key === usable[1]?.key)),
       el("td", { className: "pick" }, pick("after", run, run.key === usable[0]?.key)),
       el("td", {}, when(run.createdAt)),
-      el("td", {}, statusBadge(run.status, run.error || ""), run.error ? el("div", { className: "muted" }, run.error) : ""),
+      el("td", {}, statusBadge(run.status, run.error || ""), run.error ? el("div", { className: "muted" }, run.error) : "",
+         reasonList(run)),
       el("td", { className: "muted" }, changes),
       el("td", { className: "muted hide-narrow" }, [run.settingsFile, run.machine].filter(Boolean).join(" · ")),
       el("td", {}, run.workbook ? el("a", { href: "/api/workbook?" + new URLSearchParams({ run: run.key }) }, "Download") : ""),

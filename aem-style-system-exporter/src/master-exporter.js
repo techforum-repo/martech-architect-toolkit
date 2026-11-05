@@ -79,6 +79,36 @@ function exportRun(run, env, data) {
   return aem;
 }
 
+// Why a run is incomplete, in words, from its validation report: nodes AEM
+// didn't return, the crawl limit, template policies found nowhere.
+function incompleteReasons(validation, policyRoot) {
+  const reasons = [];
+  const byError = new Map();
+  for (const error of validation.errors || []) {
+    byError.set(error.error, [...(byError.get(error.error) || []), error.path]);
+  }
+  for (const [message, paths] of byError) {
+    reasons.push(`${paths.length} node(s) couldn't be read (${message}), e.g. ${paths[0]}`);
+  }
+  if (validation.truncated) {
+    reasons.push('The crawl stopped at a limit (MAX_NODES or MAX_DEPTH): raise it in the settings');
+  }
+  const missing = validation.missingReferences || [];
+  if (missing.length) {
+    const policies = [...new Set(missing.map(ref => ref.resolvedPolicyPath))];
+    const notFound = missing.filter(ref => ref.status === 'Not Found in AEM').length;
+    const one = policies.length === 1;
+    reasons.push(`${policies.length} polic${one ? 'y' : 'ies'} that templates use (${missing.length} reference(s)) ` +
+                 (notFound === missing.length ? (one ? "isn't in AEM" : "aren't in AEM")
+                   : `couldn't be checked or ${one ? "isn't" : "aren't"} in AEM`) +
+                 ` (also not in /conf/global, /apps or /libs), e.g. ${String(policies[0]).replace(policyRoot + '/', '')}`);
+  }
+  if (validation.counts && validation.counts.policies === 0) {
+    reasons.push(`No policies found under ${policyRoot}: check AEM_POLICY_ROOT`);
+  }
+  return reasons;
+}
+
 function main() {
   const environmentArg = (process.argv[2] || '').trim();
   const file = settingsFor(environmentArg);
@@ -127,11 +157,15 @@ function main() {
   }
 
   const validation = store.readJson(path.join(data, 'validation-report.json'), {});
+  const incomplete = validation.complete === false || aem === 2;
+  const reasons = incomplete ? incompleteReasons(validation, process.env.AEM_POLICY_ROOT || '') : [];
   const meta = store.updateRun(run.dir, {
-    status: validation.complete === false || aem === 2 ? 'incomplete' : 'complete',
+    status: incomplete ? 'incomplete' : 'complete',
     finishedAt: new Date().toISOString(),
     aemStatus: aem,
-    warnings,
+    reasons,
+    // "AEM exporter reported incomplete results" just repeats the status; the reasons say why.
+    warnings: warnings.filter(w => w !== 'AEM exporter reported incomplete results'),
     workbook
   });
 
@@ -142,7 +176,8 @@ function main() {
   }
   const pruned = store.pruneRuns(environment.dir, keep, run.dir);
 
-  for (const w of warnings) console.warn('[WARNING]', w);
+  for (const w of meta.warnings) console.warn('[WARNING]', w);
+  for (const reason of reasons) console.warn('[INCOMPLETE]', reason);
   console.log(`\n[MASTER] Status:   ${meta.status}` +
               (meta.changes?.comparedWith ? `; ${meta.changes.total} change(s) since run ${meta.changes.comparedWith}`
                 : meta.changes ? '; first run of this environment' : ''));
