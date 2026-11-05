@@ -4,7 +4,7 @@ setlocal
 cd /d "%~dp0"
 
 echo ============================================
-echo  EWP AEM STYLE SYSTEM EXPORTER
+echo  AEM STYLE SYSTEM EXPORTER
 echo ============================================
 echo.
 

@@ -5,7 +5,7 @@ set -eu
 cd "$(dirname "$0")"
 
 echo "=========================================="
-echo " EWP AEM STYLE SYSTEM EXPORTER"
+echo " AEM STYLE SYSTEM EXPORTER"
 echo "=========================================="
 
 if ! command -v node >/dev/null 2>&1; then

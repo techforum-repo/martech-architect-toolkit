@@ -67,7 +67,7 @@ async function main() {
   }
 
   const book = new ExcelJS.Workbook();
-  book.creator = 'EWP AEM Style Exporter';
+  book.creator = 'AEM Style System Exporter';
 
   const styleRows = [];
   const policyRows = [];
