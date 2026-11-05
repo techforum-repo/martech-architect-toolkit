@@ -1,5 +1,6 @@
-// Saves this run as a snapshot (output/history/<environment>/<time>/) and
-// writes output/changes.json: what changed since the previous export of the
+// After the AEM and front-end steps of a run: saves what comparisons need
+// (theme tokens and a CSS fingerprint per style, next to the run's data) and
+// writes data/changes.json, what changed since the previous usable run of the
 // same environment and repository roots. The Excel step turns it into the
 // workbook's Changes sheet.
 
@@ -7,58 +8,62 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const { diffSnapshots } = require("./diff");
-const snapshots = require("./snapshot");
+const settings = require("./settings");
+const store = require("./store");
 
-const root = path.resolve(__dirname, "..");
-const out = path.join(root, "output");
-const historyDir = path.join(out, "history");
+settings.load();
 
-const envFile = path.join(root, ".env");
-if (typeof process.loadEnvFile === "function" && fs.existsSync(envFile)) {
-  process.loadEnvFile(envFile);
-}
-
-const keep = Number(process.env.HISTORY_KEEP || 20);
-
-function previousSnapshot(environment, policyRoot, templateRoot) {
+function previousRun(current) {
   // Newest first; only runs over the same roots compare meaningfully.
-  for (const item of snapshots.list(historyDir, environment).reverse()) {
-    const before = snapshots.load(item.dir);
-    if (before.meta.policyRoot === policyRoot && before.meta.templateRoot === templateRoot) return before;
-  }
-  return null;
+  return store.listRuns(path.dirname(current.dir), { usable: true })
+    .filter(run => run.dir !== current.dir)
+    .reverse()
+    .find(run => run.meta.policyRoot === current.meta.policyRoot &&
+                 run.meta.templateRoot === current.meta.templateRoot) || null;
 }
 
 function main() {
-  if (!Number.isInteger(keep) || keep < 2) {
-    throw new Error("HISTORY_KEEP must be a whole number of at least 2");
+  const runDir = settings.runDir();
+  if (!fs.existsSync(path.join(runDir, store.RUN_FILE))) {
+    console.log("[HISTORY] Not part of a run (use export.bat / export.sh): nothing saved.");
+    return;
   }
-  const author = process.env.AEM_AUTHOR_URL || "";
-  const policyRoot = process.env.AEM_POLICY_ROOT || "";
-  const templateRoot = process.env.AEM_TEMPLATE_ROOT || "";
-  let aemStatus = null;
-  try {
-    aemStatus = JSON.parse(fs.readFileSync(path.join(out, "master-status.json"), "utf8")).aemStatus ?? null;
-  } catch {
-    // run on its own: no master status
+  const data = settings.dataDir();
+  const read = name => store.readJson(path.join(data, name));
+
+  const policies = read("policies.json") || [];
+  const fe = read("fe-data.json");
+  if (fe) {
+    store.writeJson(path.join(runDir, store.FILES.tokens), fe.tokens || []);
+    const css = store.cssSummary(read("style-css-mapping.json"), policies);
+    if (css) store.writeJson(path.join(runDir, store.FILES.css), css);
   }
+  const complete = (read("validation-report.json") || {}).complete !== false;
+  store.updateRun(runDir, {
+    themes: fe?.loadedThemes ?? fe?.themes ?? [],
+    counts: {
+      policies: policies.length,
+      templates: (read("templates.json") || []).length,
+      styles: policies.reduce((sum, p) => sum + (p.styleGroups || []).reduce((n, g) => n + (g.styles || []).length, 0)
+                                             + (p.ungroupedStyles || []).length, 0)
+    }
+  });
 
-  const current = snapshots.fromOutput(out, { author, policyRoot, templateRoot, aemStatus });
-  const before = previousSnapshot(current.meta.environment, policyRoot, templateRoot);
-  const saved = snapshots.save(historyDir, current);
-  const pruned = snapshots.prune(historyDir, current.meta.environment, keep);
-
+  const current = store.loadRun(runDir);
+  current.meta.complete = complete;
+  const before = previousRun(current);
   const changes = before
-    ? { comparedWith: before.meta, current: current.meta, ...diffSnapshots(before, current) }
+    ? { comparedWith: store.loadRun(before.dir).meta, current: current.meta,
+        ...diffSnapshots(store.loadRun(before.dir), current) }
     : { comparedWith: null, current: current.meta, rows: [], counts: {},
-        notes: ["First export for this environment: the next export will list what changed."] };
-  fs.writeFileSync(path.join(out, "changes.json"), JSON.stringify(changes, null, 2));
+        notes: ["First export of this environment: the next export will list what changed."] };
+  store.writeJson(path.join(data, "changes.json"), changes);
+  store.updateRun(runDir, { changes: { comparedWith: before ? before.id : null, total: changes.rows.length } });
 
-  console.log(`[HISTORY] Saved ${path.relative(root, saved)}` + (pruned ? ` (removed ${pruned} old)` : ""));
-  if (before) {
-    console.log(`[HISTORY] ${changes.rows.length} change(s) since ${before.meta.createdAt}`);
-  }
-  for (const note of changes.notes) console.log(`[HISTORY] ${note}`);
+  console.log(before
+    ? `[HISTORY] ${changes.rows.length} change(s) since run ${before.id}`
+    : "[HISTORY] First export of this environment: nothing to compare with yet.");
+  for (const note of before ? changes.notes : []) console.log(`[HISTORY] ${note}`);
 }
 
 try {

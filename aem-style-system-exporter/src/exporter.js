@@ -3,8 +3,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { URL } = require("node:url");
 
-const root = path.resolve(__dirname, "..");
-process.loadEnvFile(path.join(root, ".env"));
+const settings = require("./settings");
+
+settings.load();
+const dataDir = settings.dataDir();
 
 const author = process.env.AEM_AUTHOR_URL?.replace(/\/$/, "");
 const token = process.env.AEM_LOCAL_TOKEN?.trim();
@@ -529,7 +531,7 @@ async function verifyPolicyReferences(references) {
 
 
 function save(filename, data) {
-  const outputPath = path.join(root, "output", filename);
+  const outputPath = path.join(dataDir, filename);
 
   fs.writeFileSync(
     outputPath,
@@ -540,9 +542,6 @@ function save(filename, data) {
 }
 
 async function main() {
-  fs.mkdirSync(path.join(root, "output"), {
-    recursive: true
-  });
 
   console.log("=".repeat(60));
   console.log(" AEM STYLE SYSTEM EXPORTER - EWP");
@@ -641,7 +640,7 @@ async function main() {
   console.log("Errors:              ", errors.length);
   console.log("Truncated:           ", truncated);
   console.log("Duration:            ", duration, "seconds");
-  console.log("Output directory:    ", path.join(root, "output"));
+  console.log("Output directory:    ", dataDir);
   console.log("=".repeat(60));
 
   if (!validation.complete || policies.length === 0) {

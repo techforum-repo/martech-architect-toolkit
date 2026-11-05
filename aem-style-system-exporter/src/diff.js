@@ -193,8 +193,18 @@ function diffSnapshots(before, after) {
     notes.push("One of the exports was incomplete (see its validation report): some additions or removals may only be missing data.");
   }
   if (!compareFe) notes.push("Theme tokens and CSS not compared: front-end CSS wasn't read in both exports.");
+  const envName = meta => meta.environmentName || meta.environment;
   if (before.meta?.environment && after.meta?.environment && before.meta.environment !== after.meta.environment) {
-    notes.push(`Different environments: ${before.meta.environment} → ${after.meta.environment}.`);
+    notes.push(`Between environments: ${envName(before.meta)} → ${envName(after.meta)}.`);
+    // A policy created separately in each environment gets a different
+    // policy_<id>: it then shows as removed on one side and added on the other.
+    const key = row => row.item;
+    const removed = new Set(rows.filter(r => r.area === "Policy" && r.change === "Removed").map(key));
+    const twins = rows.filter(r => r.area === "Policy" && r.change === "Added" && removed.has(key(r))).length;
+    if (twins) {
+      notes.push(`${twins} polic${twins === 1 ? "y appears" : "ies appear"} removed and added with the same component ` +
+                 "and title: probably created separately in each environment, so their policy IDs differ.");
+    }
   }
 
   return { rows, counts, notes };

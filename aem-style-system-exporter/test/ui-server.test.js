@@ -5,20 +5,33 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const snapshots = require("../src/snapshot");
+const store = require("../src/store");
 const { start } = require("../src/ui-server");
 
-function history() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "compare-ui-"));
-  const save = (day, templates) => snapshots.save(dir, {
-    meta: { id: `2026-11-0${day}T10-00-00Z`, environment: "author.example.com", createdAt: `2026-11-0${day}T10:00:00.000Z`,
-            complete: true, policyRoot: "/conf/s/settings/wcm/policies", templateRoot: "/conf/s/settings/wcm/templates" },
-    policies: [], templates, usage: [], tokens: null, css: null
-  });
-  save(1, [{ path: "/conf/s/settings/wcm/templates/page", name: "page", title: "Page", status: "enabled" }]);
-  save(2, [{ path: "/conf/s/settings/wcm/templates/page", name: "page", title: "Page", status: "enabled" },
-           { path: "/conf/s/settings/wcm/templates/campaign", name: "campaign", title: "Campaign", status: "draft" }]);
-  return dir;
+const T = "/conf/s/settings/wcm/templates";
+
+// prod: two runs (a template added in between) and a failed one; stage: one run.
+function exports() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "compare-ui-"));
+  const run = (env, day, status, templates) => {
+    const created = store.createRun(env, { policyRoot: "/conf/s/settings/wcm/policies", templateRoot: T },
+                                    new Date(`2026-11-0${day}T10:00:00Z`));
+    store.writeJson(path.join(created.dir, store.FILES.policies), []);
+    store.writeJson(path.join(created.dir, store.FILES.templates), templates);
+    store.writeJson(path.join(created.dir, store.FILES.usage), []);
+    store.updateRun(created.dir, { status });
+    if (status === "complete") fs.writeFileSync(path.join(created.dir, `Style-System_${env.name}_${created.id}.xlsx`), "PK");
+    return created;
+  };
+  const page = { path: `${T}/page`, name: "page", title: "Page", status: "enabled" };
+  const campaign = { path: `${T}/campaign`, name: "campaign", title: "Campaign", status: "draft" };
+  const prod = store.registerEnvironment(root, { author: "https://author-p1-e2.adobeaemcloud.com", name: "prod" });
+  const stage = store.registerEnvironment(root, { author: "https://author-p1-e3.adobeaemcloud.com", name: "stage" });
+  run(prod, 1, "complete", [page]);
+  run(prod, 2, "complete", [page, campaign]);
+  run(prod, 3, "failed", []);
+  run(stage, 4, "complete", [page, campaign, { ...campaign, path: `${T}/event`, name: "event", title: "Event" }]);
+  return root;
 }
 
 function get(port, pathname, { host = `127.0.0.1:${port}`, method = "GET" } = {}) {
@@ -26,37 +39,47 @@ function get(port, pathname, { host = `127.0.0.1:${port}`, method = "GET" } = {}
     const request = http.request({ host: "127.0.0.1", port, path: pathname, method, headers: { Host: host } }, response => {
       const chunks = [];
       response.on("data", chunk => chunks.push(chunk));
-      response.on("end", () => resolve({ status: response.statusCode, type: response.headers["content-type"],
-                                         body: Buffer.concat(chunks) }));
+      response.on("end", () => resolve({ status: response.statusCode, headers: response.headers, body: Buffer.concat(chunks) }));
     });
     request.on("error", reject);
     request.end();
   });
 }
 
-test("the compare page lists exports, compares them and refuses anything else", async t => {
-  const { server, port } = await start({ historyDir: history(), port: 18510, open: false });
+test("the compare page: environments, runs, comparisons and downloads", async t => {
+  const { server, port } = await start({ root: exports(), port: 18510, open: false });
   t.after(() => server.close());
 
-  const page = await get(port, "/");
-  assert.equal(page.status, 200);
-  assert.match(page.body.toString(), /Compare exports/);
+  assert.match((await get(port, "/")).body.toString(), /Between environments/);
 
-  const exports = JSON.parse((await get(port, "/api/exports")).body);
-  assert.deepEqual(exports.map(e => e.key),
-                   ["author.example.com/2026-11-02T10-00-00Z", "author.example.com/2026-11-01T10-00-00Z"]);
+  const environments = JSON.parse((await get(port, "/api/environments")).body);
+  assert.deepEqual(environments.map(e => e.label), ["stage (p1-e3)", "prod (p1-e2)"]);  // latest run first
+  const prod = environments[1];
+  assert.deepEqual(prod.runs.map(r => r.status), ["failed", "complete", "complete"]);  // newest first
+  assert.equal(prod.runs[1].workbook, true);
 
-  const query = `before=${encodeURIComponent(exports[1].key)}&after=${encodeURIComponent(exports[0].key)}`;
-  const changes = JSON.parse((await get(port, "/api/compare?" + query)).body);
-  assert.deepEqual(changes.rows.map(r => [r.area, r.change, r.item]), [["Template", "Added", "campaign (Campaign)"]]);
+  const compare = async (before, after) =>
+    JSON.parse((await get(port, `/api/compare?before=${encodeURIComponent(before)}&after=${encodeURIComponent(after)}`)).body);
 
-  const workbook = await get(port, "/api/compare.xlsx?" + query);
+  // Over time, on prod.
+  const overTime = await compare(prod.runs[2].key, prod.runs[1].key);
+  assert.deepEqual(overTime.rows.map(r => [r.change, r.item]), [["Added", "campaign (Campaign)"]]);
+
+  // Between environments: what stage has that prod doesn't.
+  const between = await compare(prod.runs[1].key, environments[0].runs[0].key);
+  assert.deepEqual(between.rows.map(r => [r.change, r.item]), [["Added", "event (Event)"]]);
+  assert.ok(between.notes.some(n => n.includes("prod → stage")));
+
+  // A run's own workbook, and the comparison as a workbook.
+  const workbook = await get(port, "/api/workbook?run=" + encodeURIComponent(prod.runs[1].key));
   assert.equal(workbook.status, 200);
-  assert.equal(workbook.body.subarray(0, 2).toString(), "PK");  // an .xlsx is a zip
+  assert.match(workbook.headers["content-disposition"], /Style-System_prod_2026-11-02_100000Z\.xlsx/);
+  const comparison = await get(port, `/api/compare.xlsx?before=${encodeURIComponent(prod.runs[2].key)}&after=${encodeURIComponent(prod.runs[1].key)}`);
+  assert.equal(comparison.body.subarray(0, 2).toString(), "PK");
 
-  // Only exports the listing returned, never a path from the request.
-  assert.equal((await get(port, "/api/compare?before=../../etc&after=" + encodeURIComponent(exports[0].key))).status, 404);
-  // Only requests addressed to this machine's own address, and only reads.
+  // Failed runs aren't compared; only listed runs, never a path; only this host; only reads.
+  assert.equal((await get(port, `/api/compare?before=${encodeURIComponent(prod.runs[0].key)}&after=${encodeURIComponent(prod.runs[1].key)}`)).status, 404);
+  assert.equal((await get(port, "/api/workbook?run=../../etc")).status, 404);
   assert.equal((await get(port, "/", { host: `evil.example:${port}` })).status, 403);
-  assert.equal((await get(port, "/api/exports", { method: "POST" })).status, 405);
+  assert.equal((await get(port, "/api/environments", { method: "POST" })).status, 405);
 });

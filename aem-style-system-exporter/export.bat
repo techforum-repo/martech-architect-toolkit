@@ -47,7 +47,7 @@ echo.
 echo [2/3] Running AEM and FE export...
 echo.
 
-node src\master-exporter.js
+node src\master-exporter.js %*
 set "EXIT_CODE=%ERRORLEVEL%"
 
 echo.

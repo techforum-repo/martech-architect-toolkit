@@ -3,8 +3,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const postcss = require('postcss');
 
-const root = path.resolve(__dirname, '..');
-const out = path.join(root, 'output', 'fe-data.json');
+const settings = require('./settings');
+
+settings.load();
+const out = path.join(settings.dataDir(), 'fe-data.json');
 
 const project = process.env.FE_PROJECT_PATH?.trim();
 

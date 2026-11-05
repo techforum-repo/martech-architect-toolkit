@@ -4,8 +4,10 @@ const path = require('node:path');
 const ExcelJS = require('exceljs');
 const {changesSheet, sheet} = require('./workbook');
 
-const root = path.resolve(__dirname, '..');
-const dir = path.join(root, 'output');
+const settings = require('./settings');
+
+settings.load();
+const dir = settings.dataDir();
 
 const read = (name, fallback) => {
   const p = path.join(dir, name);
@@ -19,7 +21,6 @@ const refs = read('policy-usage.json', []);
 const validation = read('validation-report.json', {});
 const fe = read('fe-data.json', null);
 const mapping = read('style-css-mapping.json', null);
-const master = read('master-status.json', {warnings: []});
 const changes = read('changes.json', null);
 
 const lookup = new Map(
@@ -223,10 +224,7 @@ async function main() {
     }
   }
 
-  const dest = path.join(
-    dir,
-    'EWP_Style_System_Export.xlsx'
-  );
+  const dest = settings.workbookPath();
 
   await book.xlsx.writeFile(dest);
 
@@ -235,12 +233,12 @@ async function main() {
   if(validation.complete === false) {
     console.warn(
       '[WARNING] AEM validation incomplete; ' +
-      'see output/validation-report.json'
+      'see ' + path.join(dir, 'validation-report.json')
     );
   }
 
   for(const w of [
-    ...(master.warnings || []),
+    // The master prints its own warnings (master.warnings) after this step.
     ...(fe?.warnings || [])
   ]) {
     console.warn('[WARNING]',w);

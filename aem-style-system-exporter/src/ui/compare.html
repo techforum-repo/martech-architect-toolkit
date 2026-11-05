@@ -7,16 +7,16 @@
 <style>
 :root {
   --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #5d6676; --line: #dfe3ea;
-  --accent: #183a5b; --accent-text: #ffffff; --focus: #2f6fb3;
+  --accent: #183a5b; --accent-text: #ffffff; --focus: #2f6fb3; --row-hover: #f2f6fb;
   --added: #1e7d4f; --added-bg: #e5f4ec; --removed: #b3261e; --removed-bg: #fbe9e7;
-  --changed: #8a5a00; --changed-bg: #fdf3dc; --note-bg: #eef3fb;
+  --changed: #8a5a00; --changed-bg: #fdf3dc; --note-bg: #eef3fb; --neutral-bg: #eceff4;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #15181e; --panel: #1d2129; --text: #e6e9ef; --muted: #9aa3b2; --line: #313744;
-    --accent: #3d6b99; --accent-text: #ffffff; --focus: #7fb0e6;
+    --accent: #3d6b99; --accent-text: #ffffff; --focus: #7fb0e6; --row-hover: #232a35;
     --added: #6fcf97; --added-bg: #183326; --removed: #f2998e; --removed-bg: #3a1d1b;
-    --changed: #f0c36a; --changed-bg: #3a2f17; --note-bg: #1f2a3a;
+    --changed: #f0c36a; --changed-bg: #3a2f17; --note-bg: #1f2a3a; --neutral-bg: #2a303b;
   }
 }
 * { box-sizing: border-box; }
@@ -27,7 +27,11 @@ header h1 { margin: 0; font-size: 18px; font-weight: 600; }
 header p { margin: 2px 0 0; opacity: .85; font-size: 13px; }
 main { max-width: 1400px; margin: 0 auto; padding: 20px 24px 40px; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
-.pick { display: grid; grid-template-columns: 1fr auto 1fr auto; gap: 12px; align-items: end; }
+.tabs { display: flex; gap: 4px; margin-bottom: -1px; }
+.tab { border: 1px solid var(--line); border-bottom: 0; border-radius: 8px 8px 0 0; padding: 9px 16px;
+  background: transparent; color: var(--muted); font-weight: 600; }
+.tab[aria-selected=true] { background: var(--panel); color: var(--text); }
+.tabpanel { border-top-left-radius: 0; }
 label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .03em; }
 select, input[type=search] { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--panel); color: var(--text); font: inherit; }
@@ -35,9 +39,23 @@ button { font: inherit; border-radius: 6px; padding: 8px 14px; cursor: pointer; 
   background: var(--panel); color: var(--text); }
 button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
 button:disabled { opacity: .5; cursor: default; }
-button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.actions { display: flex; gap: 8px; }
-.swap { padding: 8px 10px; }
+button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+a { color: var(--focus); }
+.row { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
+.grow { flex: 1; min-width: 220px; }
+.actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.pair { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: end; }
+.side { display: grid; gap: 8px; }
+.side h2 { margin: 0; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.hint { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+.runs th.pick, .runs td.pick { width: 64px; text-align: center; }
+.runs tr.unusable td { color: var(--muted); }
+.runs tbody tr:hover { background: var(--row-hover); }
+.status { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.status.complete { color: var(--added); background: var(--added-bg); }
+.status.incomplete { color: var(--changed); background: var(--changed-bg); }
+.status.failed { color: var(--removed); background: var(--removed-bg); }
+.status.running { color: var(--muted); background: var(--neutral-bg); }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
 .card { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--panel); }
 .card h3 { margin: 0 0 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
@@ -58,49 +76,76 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
 table { width: 100%; border-collapse: collapse; background: var(--panel); }
 th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--line); }
-th { position: sticky; top: 0; background: var(--panel); font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+th { background: var(--panel); font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
 td.item { font-weight: 600; word-break: break-word; }
 td.details { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12.5px; word-break: break-word; }
-td.who { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+td.who, td.muted { color: var(--muted); font-size: 12.5px; }
 .empty { text-align: center; color: var(--muted); padding: 32px 16px; }
 .error { color: var(--removed); }
 @media (max-width: 760px) {
   main { padding: 16px; }
-  .pick { grid-template-columns: 1fr; }
-  .swap { justify-self: start; }
-  /* Each change as a card: label, then value. */
-  .table-wrap { border: 0; overflow: visible; }
-  table, tbody, tr, td { display: block; width: 100%; }
-  thead { display: none; }
-  tr { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 10px; padding: 6px 0; }
-  td { border: 0; padding: 4px 12px; }
-  td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; font-weight: 600;
+  .pair { grid-template-columns: 1fr; }
+  .changes .table-wrap { border: 0; overflow: visible; }
+  .changes table, .changes tbody, .changes tr, .changes td { display: block; width: 100%; }
+  .changes thead { display: none; }
+  .changes tr { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 10px; padding: 6px 0; }
+  .changes td { border: 0; padding: 4px 12px; }
+  .changes td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; font-weight: 600;
     color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
-  td.who { white-space: normal; }
-  td.who:empty { display: none; }
+  .changes td.who:empty { display: none; }
+  .runs .hide-narrow { display: none; }
 }
 </style>
 </head>
 <body>
 <header>
   <h1>Compare exports</h1>
-  <p>What changed in templates, policies, styles and theme CSS between two saved exports.</p>
+  <p>What changed in templates, policies, styles and theme CSS: on one environment over time, or between environments.</p>
 </header>
 <main>
-  <section class="panel">
-    <div class="pick">
-      <div><label for="before">Before</label><select id="before"></select></div>
-      <button class="swap" id="swap" title="Swap before and after" aria-label="Swap before and after">⇄</button>
-      <div><label for="after">After</label><select id="after"></select></div>
-      <div class="actions">
-        <button class="primary" id="compare">Compare</button>
-        <button id="download" disabled>Download Excel</button>
-      </div>
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" id="tab-time" aria-controls="panel-time" aria-selected="true">Over time</button>
+    <button class="tab" role="tab" id="tab-envs" aria-controls="panel-envs" aria-selected="false">Between environments</button>
+  </div>
+
+  <section class="panel tabpanel" id="panel-time" role="tabpanel" aria-labelledby="tab-time">
+    <div class="row">
+      <div class="grow"><label for="timeEnv">Environment</label><select id="timeEnv"></select></div>
     </div>
+    <div class="table-wrap" style="margin-top:12px">
+      <table class="runs">
+        <thead><tr><th class="pick">Before</th><th class="pick">After</th><th>Run</th><th>Status</th>
+          <th>Changes since previous</th><th class="hide-narrow">Machine</th><th>Workbook</th></tr></thead>
+        <tbody id="timeRuns"></tbody>
+      </table>
+    </div>
+    <p class="hint">Pick a Before and an After run. Failed runs can't be compared.</p>
+    <div class="actions"><button class="primary" id="timeCompare">Compare</button></div>
   </section>
 
-  <section id="result" hidden>
-    <p class="compared" id="compared"></p>
+  <section class="panel tabpanel" id="panel-envs" role="tabpanel" aria-labelledby="tab-envs" hidden>
+    <div class="pair">
+      <div class="side">
+        <h2>Before</h2>
+        <div><label for="envA">Environment</label><select id="envA"></select></div>
+        <div><label for="runA">Run</label><select id="runA"></select></div>
+      </div>
+      <button id="envSwap" title="Swap before and after" aria-label="Swap before and after">⇄</button>
+      <div class="side">
+        <h2>After</h2>
+        <div><label for="envB">Environment</label><select id="envB"></select></div>
+        <div><label for="runB">Run</label><select id="runB"></select></div>
+      </div>
+    </div>
+    <p class="hint">E.g. Before: prod, After: stage shows what stage has that prod doesn't yet.</p>
+    <div class="actions"><button class="primary" id="envCompare">Compare</button></div>
+  </section>
+
+  <section id="result" class="changes" hidden>
+    <div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <p class="compared" id="compared" style="margin:0"></p>
+      <button id="download">Download comparison (Excel)</button>
+    </div>
     <div class="cards" id="cards"></div>
     <ul class="notes" id="notes"></ul>
     <section class="panel" style="margin-top:16px">
@@ -124,35 +169,19 @@ td.who { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
 <script>
 const AREAS = ["Template", "Template policy", "Policy", "Style", "Theme token", "Style CSS"];
 const CHANGES = ["Added", "Removed", "Changed"];
+const USABLE = new Set(["complete", "incomplete"]);
 const $ = id => document.getElementById(id);
 const el = (tag, props = {}, ...children) => {
   const node = Object.assign(document.createElement(tag), props);
   for (const child of children) node.append(child);  // text, never HTML
   return node;
 };
-let exports = [], current = null;
+let environments = [], current = null, lastQuery = "";
 const filters = { areas: new Set(), changes: new Set(), text: "" };
 
-function when(iso) {
-  return iso ? iso.slice(0, 16).replace("T", " ") + " UTC" : "";
-}
-
-function optionLabel(item) {
-  // To the second: two exports can fall in the same minute.
-  const time = item.createdAt ? item.createdAt.slice(0, 19).replace("T", " ") + " UTC" : item.id;
-  return time + (item.complete ? "" : "  (incomplete)");
-}
-
-function fillSelect(select) {
-  select.replaceChildren();
-  const byEnv = new Map();
-  for (const item of exports) byEnv.set(item.environment, [...(byEnv.get(item.environment) || []), item]);
-  for (const [environment, items] of byEnv) {
-    const group = el("optgroup", { label: environment });
-    for (const item of items) group.append(el("option", { value: item.key }, optionLabel(item)));
-    select.append(group);
-  }
-}
+const when = iso => iso ? iso.slice(0, 19).replace("T", " ") + " UTC" : "";
+const usableRuns = env => env.runs.filter(run => USABLE.has(run.status));
+const envById = id => environments.find(env => env.id === id);
 
 function message(text, isError = false) {
   $("message").textContent = text;
@@ -166,40 +195,111 @@ async function getJson(url) {
   return body;
 }
 
-function query() {
-  return new URLSearchParams({ before: $("before").value, after: $("after").value }).toString();
+function envOptions(select) {
+  select.replaceChildren(...environments.map(env =>
+    el("option", { value: env.id }, `${env.label}  (${usableRuns(env).length} run${usableRuns(env).length === 1 ? "" : "s"})`)));
 }
 
-async function compare() {
-  if (!$("before").value || !$("after").value) return;
-  location.hash = query();
+// --- Tabs -----------------------------------------------------------------------
+
+function showTab(mode) {
+  for (const [tab, panel, name] of [["tab-time", "panel-time", "time"], ["tab-envs", "panel-envs", "envs"]]) {
+    $(tab).setAttribute("aria-selected", mode === name);
+    $(panel).hidden = mode !== name;
+  }
+}
+
+// --- Over time ------------------------------------------------------------------
+
+function renderTimeline() {
+  const env = envById($("timeEnv").value);
+  if (!env) return;
+  const usable = usableRuns(env);
+  const pick = (name, run, checked) => {
+    const input = el("input", { type: "radio", name, value: run.key, checked, disabled: !USABLE.has(run.status) });
+    input.setAttribute("aria-label", `${name === "before" ? "Before" : "After"}: ${when(run.createdAt)}`);
+    return input;
+  };
+  $("timeRuns").replaceChildren(...env.runs.map(run => {
+    const changes = run.changes?.comparedWith ? `${run.changes.total} since ${run.changes.comparedWith}`
+      : USABLE.has(run.status) ? "first run" : "";
+    const status = el("span", { className: "status " + run.status }, run.status);
+    if (run.error) status.title = run.error;
+    const workbook = run.workbook
+      ? el("a", { href: "/api/workbook?" + new URLSearchParams({ run: run.key }) }, "Download") : "";
+    return el("tr", { className: USABLE.has(run.status) ? "" : "unusable" },
+      el("td", { className: "pick" }, pick("before", run, run.key === usable[1]?.key)),
+      el("td", { className: "pick" }, pick("after", run, run.key === usable[0]?.key)),
+      el("td", {}, when(run.createdAt)),
+      el("td", {}, status, run.error ? el("div", { className: "muted" }, run.error) : ""),
+      el("td", { className: "muted" }, changes),
+      el("td", { className: "muted hide-narrow" }, run.machine || ""),
+      el("td", {}, workbook));
+  }));
+  $("timeCompare").disabled = usable.length < 2;
+  if (usable.length < 2) message(`${env.label} has ${usable.length} usable run so far: the next export can be compared with it.`);
+}
+
+function timeSelection() {
+  const value = name => document.querySelector(`input[name=${name}]:checked`)?.value || "";
+  return { before: value("before"), after: value("after") };
+}
+
+// --- Between environments -----------------------------------------------------------
+
+function runOptions(select, envId) {
+  const env = envById(envId);
+  select.replaceChildren(...(env ? usableRuns(env) : []).map((run, i) =>
+    el("option", { value: run.key }, when(run.createdAt) + (i === 0 ? "  (latest)" : "") +
+                                     (run.status === "incomplete" ? "  (incomplete)" : ""))));
+}
+
+function setupEnvironments() {
+  envOptions($("envA"));
+  envOptions($("envB"));
+  // Defaults: the two environments with the latest runs, older first.
+  const withRuns = environments.filter(env => usableRuns(env).length);
+  $("envA").value = (withRuns[1] || withRuns[0] || {}).id || "";
+  $("envB").value = (withRuns[0] || {}).id || "";
+  runOptions($("runA"), $("envA").value);
+  runOptions($("runB"), $("envB").value);
+}
+
+// --- Results --------------------------------------------------------------------
+
+async function compare({ before, after }, mode) {
+  if (!before || !after) return message("Pick a Before and an After run.");
+  if (before === after) return message("Before and After are the same run.");
+  lastQuery = new URLSearchParams({ before, after }).toString();
+  history.replaceState(null, "", "#" + new URLSearchParams({ mode, before, after }));
   message("Comparing…");
   $("result").hidden = true;
   try {
-    current = await getJson("/api/compare?" + query());
+    current = await getJson("/api/compare?" + lastQuery);
     message("");
-    render();
-    $("download").disabled = false;
+    renderResult();
   } catch (error) {
     message("Couldn't compare: " + error.message, true);
   }
 }
 
-function render() {
-  const { comparedWith: a, current: b, counts, notes, rows } = current;
-  $("compared").textContent = `${a.environment}, ${when(a.createdAt)}  →  ${b.environment}, ${when(b.createdAt)}`;
+function describe(meta) {
+  const env = meta.environmentName ? `${meta.environmentName} (${meta.environment})` : meta.environment;
+  return `${env}, ${when(meta.createdAt)}`;
+}
 
+function renderResult() {
+  const { comparedWith: a, current: b, counts, notes, rows } = current;
+  $("compared").textContent = `${describe(a)}  →  ${describe(b)}`;
   $("cards").replaceChildren(...AREAS.filter(area => counts[area]).map(area => el("div", { className: "card" },
     el("h3", {}, area),
     el("div", { className: "badges" }, ...CHANGES.filter(c => counts[area][c])
       .map(c => el("span", { className: "badge " + c }, `${counts[area][c]} ${c.toLowerCase()}`))))));
   $("notes").replaceChildren(...notes.map(note => el("li", {}, note)));
-
-  const present = AREAS.filter(area => counts[area]);
-  chips($("areaChips"), present, filters.areas);
+  chips($("areaChips"), AREAS.filter(area => counts[area]), filters.areas);
   chips($("changeChips"), CHANGES.filter(c => rows.some(r => r.change === c)), filters.changes);
   $("result").hidden = false;
-  if (!rows.length) message("No changes between these exports.");
+  if (!rows.length) message("No changes between these runs.");
   renderRows();
 }
 
@@ -241,49 +341,54 @@ function renderRows() {
   $("count").textContent = `${shown.length} of ${current.rows.length} change(s)`;
 }
 
-function pickDefaults() {
-  const fromHash = new URLSearchParams(location.hash.slice(1));
-  const keys = new Set(exports.map(e => e.key));
-  if (keys.has(fromHash.get("before")) && keys.has(fromHash.get("after"))) {
-    $("before").value = fromHash.get("before");
-    $("after").value = fromHash.get("after");
-    return true;
-  }
-  // The newest export, against the previous one of the same environment.
-  const latest = exports[0];
-  const previous = exports.find(e => e.environment === latest.environment && e.key !== latest.key);
-  $("after").value = latest.key;
-  if (previous) $("before").value = previous.key;
-  return Boolean(previous);
-}
+// --- Start ----------------------------------------------------------------------
 
 async function init() {
   try {
-    exports = await getJson("/api/exports");
+    environments = await getJson("/api/environments");
   } catch (error) {
-    return message("Couldn't list saved exports: " + error.message, true);
+    return message("Couldn't list exports: " + error.message, true);
   }
-  if (!exports.length) {
-    $("compare").disabled = true;
-    return message("No saved exports yet. Run export.bat (or sh export.sh): each export is saved and can be compared here.");
+  if (!environments.length) {
+    $("timeCompare").disabled = $("envCompare").disabled = true;
+    return message("No exports yet. Run export.bat (or sh export.sh): every run is saved and can be compared here.");
   }
-  fillSelect($("before"));
-  fillSelect($("after"));
-  if (pickDefaults()) {
-    compare();
-  } else {
-    message("Only one export saved so far. The next export can be compared with it, or pick another environment's export.");
+  envOptions($("timeEnv"));
+  setupEnvironments();
+
+  const state = new URLSearchParams(location.hash.slice(1));
+  const [beforeEnv] = (state.get("before") || "").split("/");
+  const [afterEnv] = (state.get("after") || "").split("/");
+  if (state.get("mode") === "envs" && envById(beforeEnv) && envById(afterEnv)) {
+    showTab("envs");
+    $("envA").value = beforeEnv; runOptions($("runA"), beforeEnv); $("runA").value = state.get("before");
+    $("envB").value = afterEnv; runOptions($("runB"), afterEnv); $("runB").value = state.get("after");
+    renderTimeline();
+    return compare({ before: $("runA").value, after: $("runB").value }, "envs");
   }
+  if (envById(afterEnv)) $("timeEnv").value = afterEnv;
+  renderTimeline();
+  for (const [name, key] of [["before", state.get("before")], ["after", state.get("after")]]) {
+    const input = [...document.querySelectorAll(`input[name=${name}]`)].find(i => i.value === key && !i.disabled);
+    if (input) input.checked = true;
+  }
+  if (!$("timeCompare").disabled) compare(timeSelection(), "time");
 }
 
-$("compare").onclick = compare;
-$("swap").onclick = () => {
-  [$("before").value, $("after").value] = [$("after").value, $("before").value];
-  compare();
+$("tab-time").onclick = () => showTab("time");
+$("tab-envs").onclick = () => showTab("envs");
+$("timeEnv").onchange = () => { $("result").hidden = true; message(""); renderTimeline(); };
+$("timeCompare").onclick = () => compare(timeSelection(), "time");
+$("envA").onchange = () => runOptions($("runA"), $("envA").value);
+$("envB").onchange = () => runOptions($("runB"), $("envB").value);
+$("envCompare").onclick = () => compare({ before: $("runA").value, after: $("runB").value }, "envs");
+$("envSwap").onclick = () => {
+  const [a, b, ra, rb] = [$("envA").value, $("envB").value, $("runA").value, $("runB").value];
+  $("envA").value = b; runOptions($("runA"), b); $("runA").value = rb;
+  $("envB").value = a; runOptions($("runB"), a); $("runB").value = ra;
 };
-$("download").onclick = () => { location.href = "/api/compare.xlsx?" + query(); };
+$("download").onclick = () => { location.href = "/api/compare.xlsx?" + lastQuery; };
 $("search").oninput = event => { filters.text = event.target.value; if (current) renderRows(); };
-for (const id of ["before", "after"]) $(id).onchange = () => { $("download").disabled = true; };
 init();
 </script>
 </body>

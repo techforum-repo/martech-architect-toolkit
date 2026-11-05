@@ -35,7 +35,7 @@ fi
 echo "[2/3] Running AEM and FE export..."
 
 set +e
-node src/master-exporter.js
+node src/master-exporter.js "$@"
 STATUS=$?
 set -e
 

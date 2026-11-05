@@ -1,56 +1,56 @@
-// The compare page: a local web page to pick two saved exports and see what
-// changed between them. Started by compare.bat / compare.sh (or
-// `npm run compare` without arguments).
+// The compare page: compare.bat / sh compare.sh (or `npm run compare`).
+// Over time: one environment's runs, any two compared. Between environments:
+// one run of each (e.g. stage and prod).
 //
 // Read-only and local: it listens on 127.0.0.1 only, answers only requests
 // addressed to that host (so other websites can't reach it through DNS
-// tricks), and only reads snapshots listed in output/history.
+// tricks), and only reads runs the store lists, never a path from a request.
 
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 
-const snapshots = require("./snapshot");
-const { compareSnapshots, comparisonName, comparisonWorkbook, historyDir: defaultHistory } = require("./compare");
+const store = require("./store");
+const { compareRuns, comparisonName, comparisonWorkbook, historyRoot: defaultRoot } = require("./compare");
 
 const PAGE = path.join(__dirname, "ui", "compare.html");
-const FIRST_PORT = Number(process.env.COMPARE_UI_PORT || 8510);
 const PORT_TRIES = 20;
+const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
-function readMeta(dir) {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(dir, snapshots.FILES.meta), "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-// Saved exports, newest first, as the page lists them.
-function savedExports(historyDir) {
-  return snapshots.list(historyDir).map(item => {
-    const meta = readMeta(item.dir) || {};
-    return {
-      key: `${item.environment}/${item.id}`,
-      environment: item.environment,
-      id: item.id,
-      createdAt: meta.createdAt || "",
-      complete: meta.complete !== false,
-      author: meta.author || "",
-      themes: meta.themes || []
-    };
-  }).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+// Environments and their runs, newest first, as the page shows them.
+function environments(root) {
+  return store.listEnvironments(root).map(environment => ({
+    id: environment.id,
+    name: environment.name,
+    label: store.label(environment),
+    author: environment.author,
+    runs: store.listRuns(environment.dir).reverse().map(run => ({
+      key: `${environment.id}/${run.id}`,
+      id: run.id,
+      createdAt: run.meta.createdAt || "",
+      status: run.meta.status,
+      changes: run.meta.changes || null,
+      counts: run.meta.counts || null,
+      machine: run.meta.machine || "",
+      warnings: run.meta.warnings || [],
+      error: run.meta.error || null,
+      workbook: Boolean(store.workbookFile(run.dir))
+    }))
+  })).sort((a, b) => (b.runs[0]?.createdAt || "").localeCompare(a.runs[0]?.createdAt || ""));
 }
 
 // Only a key the listing returned, never a path from the request.
-function snapshotDir(historyDir, key) {
-  const found = snapshots.list(historyDir).find(item => `${item.environment}/${item.id}` === key);
-  if (!found) {
-    const error = new Error("Unknown export: " + key);
+function runDir(root, key, { usable = true } = {}) {
+  const [envId, runId] = String(key || "").split("/");
+  const environment = store.listEnvironments(root).find(env => env.id === envId);
+  const run = environment && store.listRuns(environment.dir, { usable }).find(item => item.id === runId);
+  if (!run) {
+    const error = new Error("Unknown run: " + key);
     error.status = 404;
     throw error;
   }
-  return found.dir;
+  return run.dir;
 }
 
 function send(response, status, type, body, headers = {}) {
@@ -68,34 +68,32 @@ function json(response, status, value) {
   send(response, status, "application/json; charset=utf-8", JSON.stringify(value));
 }
 
-function handler(historyDir, port) {
+function handler(root, port) {
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   return async (request, response) => {
     try {
-      if (!allowedHosts.has(request.headers.host || "")) {
-        return send(response, 403, "text/plain", "Forbidden");
-      }
-      if (request.method !== "GET") {
-        return send(response, 405, "text/plain", "Read-only", { Allow: "GET" });
-      }
+      if (!allowedHosts.has(request.headers.host || "")) return send(response, 403, "text/plain", "Forbidden");
+      if (request.method !== "GET") return send(response, 405, "text/plain", "Read-only", { Allow: "GET" });
       const url = new URL(request.url, `http://127.0.0.1:${port}`);
+      const param = name => url.searchParams.get(name) || "";
 
-      if (url.pathname === "/") {
-        return send(response, 200, "text/html; charset=utf-8", fs.readFileSync(PAGE));
-      }
-      if (url.pathname === "/api/exports") {
-        return json(response, 200, savedExports(historyDir));
-      }
+      if (url.pathname === "/") return send(response, 200, "text/html; charset=utf-8", fs.readFileSync(PAGE));
+      if (url.pathname === "/api/environments") return json(response, 200, environments(root));
+
       if (url.pathname === "/api/compare" || url.pathname === "/api/compare.xlsx") {
-        const before = snapshotDir(historyDir, url.searchParams.get("before") || "");
-        const after = snapshotDir(historyDir, url.searchParams.get("after") || "");
-        const changes = compareSnapshots(before, after);
+        const changes = compareRuns(runDir(root, param("before")), runDir(root, param("after")));
         if (url.pathname === "/api/compare") return json(response, 200, changes);
         const buffer = await comparisonWorkbook(changes).xlsx.writeBuffer();
-        return send(response, 200, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", Buffer.from(buffer), {
-          "Content-Disposition": `attachment; filename="compare_${comparisonName(changes)}.xlsx"`
-        });
+        return send(response, 200, XLSX, Buffer.from(buffer),
+                    { "Content-Disposition": `attachment; filename="compare_${comparisonName(changes)}.xlsx"` });
+      }
+
+      if (url.pathname === "/api/workbook") {
+        const file = store.workbookFile(runDir(root, param("run"), { usable: false }));
+        if (!file) return json(response, 404, { error: "This run has no workbook" });
+        return send(response, 200, XLSX, fs.readFileSync(file),
+                    { "Content-Disposition": `attachment; filename="${path.basename(file)}"` });
       }
       return send(response, 404, "text/plain", "Not found");
     } catch (error) {
@@ -107,11 +105,8 @@ function handler(historyDir, port) {
 function listen(server, port, triesLeft) {
   return new Promise((resolve, reject) => {
     server.once("error", error => {
-      if (error.code === "EADDRINUSE" && triesLeft > 1) {
-        resolve(listen(server, port + 1, triesLeft - 1));
-      } else {
-        reject(error);
-      }
+      if (error.code === "EADDRINUSE" && triesLeft > 1) resolve(listen(server, port + 1, triesLeft - 1));
+      else reject(error);
     });
     server.listen(port, "127.0.0.1", () => resolve(port));
   });
@@ -128,23 +123,16 @@ function openBrowser(url) {
   }
 }
 
-async function start({ historyDir = defaultHistory, port = FIRST_PORT,
+async function start({ root = defaultRoot(), port = Number(process.env.COMPARE_UI_PORT || 8510),
                        open = process.env.COMPARE_UI_NO_BROWSER !== "1" } = {}) {
   const server = http.createServer();
   const actual = await listen(server, port, PORT_TRIES);
-  server.on("request", handler(historyDir, actual));
+  server.on("request", handler(root, actual));
   const url = `http://127.0.0.1:${actual}/`;
   console.log(`[COMPARE] Compare page: ${url}  (Ctrl+C to stop)`);
-  if (!fs.existsSync(historyDir)) console.log("[COMPARE] No saved exports yet: run the export first.");
+  console.log(`[COMPARE] Exports in ${store.environmentsDir(root)}`);
   if (open) openBrowser(url);
   return { server, port: actual, url };
 }
 
-if (require.main === module) {
-  start().catch(error => {
-    console.error("[COMPARE ERROR]", error.message);
-    process.exitCode = 1;
-  });
-}
-
-module.exports = { savedExports, start };
+module.exports = { environments, start };

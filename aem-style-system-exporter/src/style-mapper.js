@@ -3,8 +3,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const selectorParser = require('postcss-selector-parser');
 
-const root = path.resolve(__dirname, '..');
-const dir = path.join(root, 'output');
+const settings = require('./settings');
+
+settings.load();
+const dir = settings.dataDir();
 
 const read = n => JSON.parse(
   fs.readFileSync(path.join(dir, n), 'utf8')

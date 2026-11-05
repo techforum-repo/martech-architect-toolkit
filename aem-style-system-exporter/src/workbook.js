@@ -60,7 +60,9 @@ function sheet(book, name, headers, rows) {
 const CHANGE_HEADERS = ['Area', 'Change', 'Item', 'Details', 'Last modified by', 'Last modified'];
 
 function describe(meta) {
-  return meta ? `${meta.environment}, exported ${meta.createdAt.slice(0, 16).replace('T', ' ')} UTC` : '';
+  if (!meta) return '';
+  const environment = meta.environmentName ? `${meta.environmentName} (${meta.environment})` : meta.environment;
+  return `${environment}, run ${meta.id}, exported ${String(meta.createdAt || '').slice(0, 16).replace('T', ' ')} UTC`;
 }
 
 function summary(counts) {

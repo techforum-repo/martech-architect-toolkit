@@ -1,53 +1,68 @@
-// Compare any two saved exports, e.g. last week's with today's, or stage
-// with prod.
+// Compare two export runs: over time on one environment, or between
+// environments (e.g. stage and prod).
 //
-//   compare.bat / sh compare.sh        opens the compare page in the browser
-//   npm run compare -- --list          lists saved exports
-//   npm run compare -- <before> <after>
+//   compare.bat / sh compare.sh          opens the compare page in the browser
+//   compare.bat --list                   environments and their runs
+//   compare.bat <before> <after>         e.g. prod~1 prod, or stage prod
 //
-// <before> and <after> are each a snapshot folder, "<environment>/<id>" as
-// --list prints it, "<environment>" for its latest export, or
-// "<environment>~1" for the one before that (~2, … further back).
-// The command line writes output/comparisons/<before>__<after>.xlsx and .json.
+// A run is "<environment>" (its latest usable run), "<environment>~1" (the
+// one before, ~2 …), "<environment>/<run id>", or a run folder. The
+// environment is its name (AEM_ENV_NAME) or id (p12345-e67890).
+// The command line writes <history>/comparisons/<before>__<after>.xlsx and .json.
 
 const fs = require("node:fs");
 const path = require("node:path");
 const ExcelJS = require("exceljs");
 
 const { diffSnapshots } = require("./diff");
-const snapshots = require("./snapshot");
+const settings = require("./settings");
+const store = require("./store");
 const { changesSheet } = require("./workbook");
 
-const root = path.resolve(__dirname, "..");
-const historyDir = path.join(root, "output", "history");
-const comparisonsDir = path.join(root, "output", "comparisons");
+settings.load();
 
-function resolve(spec, dir = historyDir) {
-  const asPath = path.resolve(spec);
-  if (fs.existsSync(path.join(asPath, snapshots.FILES.meta))) return asPath;
-  const inHistory = path.join(dir, spec);
-  if (fs.existsSync(path.join(inHistory, snapshots.FILES.meta))) return inHistory;
-
-  const [environment, back = "0"] = spec.split("~");
-  const all = snapshots.list(dir, environment);
-  const index = all.length - 1 - Number(back);
-  if (!all.length) throw new Error(`No saved exports for "${environment}" (see --list)`);
-  if (!Number.isInteger(Number(back)) || index < 0) {
-    throw new Error(`"${spec}": ${environment} has ${all.length} saved export(s)`);
-  }
-  return all[index].dir;
+function historyRoot() {
+  return settings.historyRoot();
 }
 
-// What changed from one saved export to another (snapshot folders).
-function compareSnapshots(beforeDir, afterDir) {
-  const before = snapshots.load(beforeDir);
-  const after = snapshots.load(afterDir);
+function migrate() {
+  const moved = store.migrateLegacy(historyRoot(), path.join(settings.root, "output", "history"));
+  if (moved) console.log(`[COMPARE] Moved ${moved} earlier export(s) into ${store.environmentsDir(historyRoot())}`);
+}
+
+function resolve(spec, root = historyRoot()) {
+  if (fs.existsSync(path.join(path.resolve(spec), store.RUN_FILE))) return path.resolve(spec);
+
+  const [envPart, runPart] = spec.split("/");
+  const [envSpec, back = "0"] = envPart.split("~");
+  const environment = store.findEnvironment(root, envSpec);
+  if (!environment) {
+    const known = store.listEnvironments(root).map(store.label).join(", ");
+    throw new Error(`No environment "${envSpec}"` + (known ? ` (known: ${known})` : " (no exports yet)"));
+  }
+  if (runPart) {
+    const dir = path.join(environment.dir, runPart);
+    if (!fs.existsSync(path.join(dir, store.RUN_FILE))) throw new Error(`No run ${runPart} in ${store.label(environment)}`);
+    return dir;
+  }
+  const runs = store.listRuns(environment.dir, { usable: true });
+  const index = runs.length - 1 - Number(back);
+  if (!Number.isInteger(Number(back)) || index < 0) {
+    throw new Error(`"${spec}": ${store.label(environment)} has ${runs.length} usable run(s)`);
+  }
+  return runs[index].dir;
+}
+
+// What changed from one run to another (run folders).
+function compareRuns(beforeDir, afterDir) {
+  const before = store.loadRun(beforeDir);
+  const after = store.loadRun(afterDir);
   return { comparedWith: before.meta, current: after.meta, ...diffSnapshots(before, after) };
 }
 
 function comparisonName(changes) {
-  const { comparedWith: a, current: b } = changes;
-  return `${a.environment}_${a.id}__${b.environment}_${b.id}`;
+  const part = meta => `${meta.environmentName || meta.environment}_${meta.id}`;
+  return `${part(changes.comparedWith)}__${part(changes.current)}`;
 }
 
 function comparisonWorkbook(changes) {
@@ -58,30 +73,38 @@ function comparisonWorkbook(changes) {
 }
 
 function printList() {
-  const all = snapshots.list(historyDir);
-  if (!all.length) {
-    console.log("No saved exports yet: each run of the exporter saves one.");
+  const environments = store.listEnvironments(historyRoot());
+  if (!environments.length) {
+    console.log("No exports yet: run export.bat (or sh export.sh).");
     return;
   }
-  for (const item of all) {
-    const meta = snapshots.load(item.dir).meta;
-    console.log(`${item.environment}/${item.id}` + (meta.complete ? "" : "  (incomplete)"));
+  for (const environment of environments) {
+    console.log(`${store.label(environment)}  ${environment.author}`);
+    for (const run of store.listRuns(environment.dir).reverse()) {
+      const changes = run.meta.changes;
+      console.log(`  ${run.id}  ${run.meta.status.padEnd(10)}` +
+                  (changes?.comparedWith ? `  ${changes.total} change(s) since ${changes.comparedWith}` : ""));
+    }
   }
 }
 
 async function main(args) {
+  migrate();
   if (args.length === 0) return require("./ui-server").start();
   if (args[0] === "--list") return printList();
   if (args.length !== 2) {
-    console.log("Usage: npm run compare -- <before> <after>   (or --list; no arguments opens the compare page)");
+    console.log("Usage: compare.bat <before> <after>   (e.g. prod~1 prod, or stage prod)\n" +
+                "       compare.bat --list             environments and runs\n" +
+                "       compare.bat                    the compare page");
     process.exitCode = 1;
     return;
   }
-  const changes = compareSnapshots(resolve(args[0]), resolve(args[1]));
+  const changes = compareRuns(resolve(args[0]), resolve(args[1]));
+  const dir = path.join(historyRoot(), "comparisons");
   const name = comparisonName(changes);
-  fs.mkdirSync(comparisonsDir, { recursive: true });
-  fs.writeFileSync(path.join(comparisonsDir, name + ".json"), JSON.stringify(changes, null, 2));
-  const dest = path.join(comparisonsDir, name + ".xlsx");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, name + ".json"), JSON.stringify(changes, null, 2));
+  const dest = path.join(dir, name + ".xlsx");
   await comparisonWorkbook(changes).xlsx.writeFile(dest);
 
   console.log(`[COMPARE] ${changes.rows.length} change(s)`);
@@ -90,7 +113,7 @@ async function main(args) {
 }
 
 // Exported before main runs: the compare page (ui-server.js) uses these.
-module.exports = { compareSnapshots, comparisonName, comparisonWorkbook, historyDir, resolve };
+module.exports = { compareRuns, comparisonName, comparisonWorkbook, historyRoot, migrate, resolve };
 
 if (require.main === module) {
   main(process.argv.slice(2)).catch(error => {
@@ -98,4 +121,3 @@ if (require.main === module) {
     process.exitCode = 1;
   });
 }
-
