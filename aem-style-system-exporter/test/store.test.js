@@ -103,3 +103,21 @@ test("a run still running after 12 hours shows as interrupted, and isn't compare
   assert.deepEqual(store.listRuns(env.dir, { usable: true }), []);
   assert.ok(old && now);
 });
+
+test("deleting runs: not one in progress, and the environment goes with its last run", () => {
+  const root = tempRoot();
+  const env = store.registerEnvironment(root, { author: PROD, name: "prod" });
+  const first = store.createRun(env, {}, new Date("2026-11-01T10:00:00Z"));
+  const second = store.createRun(env, {});  // started now: still in progress
+  store.updateRun(first.dir, { status: "complete" });
+
+  assert.throws(() => store.deleteRun(env.dir, second.id), /still running/);
+  assert.throws(() => store.deleteRun(env.dir, "../../etc"), /Not a run id/);
+  assert.throws(() => store.deleteRun(env.dir, "2026-01-01_000000Z"), /No run/);
+
+  assert.deepEqual(store.deleteRun(env.dir, first.id), { deleted: first.id, environmentRemoved: false });
+  assert.equal(fs.existsSync(first.dir), false);
+  store.updateRun(second.dir, { status: "failed" });
+  assert.deepEqual(store.deleteRun(env.dir, second.id), { deleted: second.id, environmentRemoved: true });
+  assert.equal(store.findEnvironment(root, "prod"), null);
+});

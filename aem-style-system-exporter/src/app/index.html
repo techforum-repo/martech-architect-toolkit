@@ -164,11 +164,12 @@ legend { font-weight: 600; padding: 0 6px; }
       <div class="table-wrap" style="margin-top:12px">
         <table class="runs">
           <thead><tr><th class="pick">Before</th><th class="pick">After</th><th>Run</th><th>Status</th>
-            <th>Changes since previous</th><th class="hide-narrow">Settings · machine</th><th>Workbook</th></tr></thead>
+            <th>Changes since previous</th><th class="hide-narrow">Settings · machine</th><th>Workbook</th><th></th></tr></thead>
           <tbody id="timeRuns"></tbody>
         </table>
       </div>
-      <p class="hint">Pick a Before and an After run to compare. Failed runs can't be compared.</p>
+      <p class="hint">Pick a Before and an After run to compare. Failed runs can't be compared.
+        Delete removes a run, its workbook and data, for everyone who shares this history.</p>
       <div class="actions"><button class="primary" id="timeCompare">Compare</button></div>
     </div>
   </section>
@@ -384,7 +385,7 @@ function renderJob(job) {
     const [envId, runId] = job.runKey.split("/");
     const run = envById(envId)?.runs.find(r => r.id === runId);
     if (run?.workbook) result.push(el("a", { href: "/api/workbook?" + new URLSearchParams({ run: job.runKey }) }, "Download workbook"));
-    if (run?.changes?.comparedWith) {
+    if (run?.changes?.comparedWith && envById(envId)?.runs.some(r => r.id === run.changes.comparedWith)) {
       const show = el("button", { type: "button" }, `Show ${run.changes.total} change(s) since the previous run`);
       show.onclick = () => {
         showTab("history");
@@ -433,8 +434,10 @@ function renderTimeline() {
     input.setAttribute("aria-label", `${name === "before" ? "Before" : "After"}: ${when(run.createdAt)}`);
     return input;
   };
+  const ids = new Set(env.runs.map(run => run.id));
   $("timeRuns").replaceChildren(...env.runs.map(run => {
-    const changes = run.changes?.comparedWith ? `${run.changes.total} since ${run.changes.comparedWith}`
+    const since = run.changes?.comparedWith;
+    const changes = since ? `${run.changes.total} since ${since}` + (ids.has(since) ? "" : " (deleted)")
       : USABLE.has(run.status) ? "first run" : "";
     return el("tr", { className: USABLE.has(run.status) ? "" : "unusable" },
       el("td", { className: "pick" }, pick("before", run, run.key === usable[1]?.key)),
@@ -443,8 +446,41 @@ function renderTimeline() {
       el("td", {}, statusBadge(run.status, run.error || ""), run.error ? el("div", { className: "muted" }, run.error) : ""),
       el("td", { className: "muted" }, changes),
       el("td", { className: "muted hide-narrow" }, [run.settingsFile, run.machine].filter(Boolean).join(" · ")),
-      el("td", {}, run.workbook ? el("a", { href: "/api/workbook?" + new URLSearchParams({ run: run.key }) }, "Download") : ""));
+      el("td", {}, run.workbook ? el("a", { href: "/api/workbook?" + new URLSearchParams({ run: run.key }) }, "Download") : ""),
+      el("td", {}, run.status === "running" ? "" : deleteButton(run)));
   }));
+}
+
+// Delete asks again on the page itself: the first click arms it for a few seconds.
+function deleteButton(run) {
+  const button = el("button", { type: "button", className: "danger" }, "Delete");
+  button.setAttribute("aria-label", `Delete run ${when(run.createdAt)}`);
+  let armed = null;
+  button.onclick = async () => {
+    if (!armed) {
+      button.textContent = "Confirm delete";
+      armed = setTimeout(() => { armed = null; button.textContent = "Delete"; }, 4000);
+      return;
+    }
+    clearTimeout(armed);
+    button.disabled = true;
+    try {
+      await api("/api/runs/delete", { run: run.key });
+      if (state.current && [state.current.comparedWith, state.current.current]
+            .some(meta => `${meta.environment}/${meta.id}` === run.key)) {
+        state.current = null;
+        $("result").hidden = true;
+      }
+      message(`Deleted the run of ${when(run.createdAt)}.`);
+      await refresh();
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "Delete";
+      armed = null;
+      message("Couldn't delete: " + error.message, true);
+    }
+  };
+  return button;
 }
 
 function timeSelection() {

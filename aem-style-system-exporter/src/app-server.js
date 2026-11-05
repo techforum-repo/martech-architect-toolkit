@@ -206,6 +206,18 @@ function handler({ root, port, key, jobs, dir }) {
         const job = jobs.start(profileKey(body.profile, dir));
         return json(response, 200, jobs.view(job));
       }
+      if (route === "POST /api/runs/delete") {
+        const key = String(body.run || "");
+        const folder = runDir(root, key, { usable: false });
+        if (jobs.list().some(job => job.status === "running" && job.runKey === key)) {
+          throw failure(409, "This run is still running: cancel it first");
+        }
+        try {
+          return json(response, 200, store.deleteRun(path.dirname(folder), path.basename(folder)));
+        } catch (error) {
+          throw failure(409, error.message);
+        }
+      }
       const cancel = url.pathname.match(/^\/api\/jobs\/(\d+)\/cancel$/);
       if (cancel) return json(response, 200, { cancelled: jobs.cancel(cancel[1]) });
       return send(response, 404, "text/plain", "Not found");

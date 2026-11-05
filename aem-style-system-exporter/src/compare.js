@@ -4,6 +4,7 @@
 //   compare.bat / sh compare.sh          opens the compare page in the browser
 //   compare.bat --list                   environments and their runs
 //   compare.bat <before> <after>         e.g. prod~1 prod, or stage prod
+//   compare.bat --delete <environment>/<run id>   deletes that run (as --list shows it)
 //
 // A run is "<environment>" (its latest usable run), "<environment>~1" (the
 // one before, ~2 …), "<environment>/<run id>", or a run folder. The
@@ -88,14 +89,28 @@ function printList() {
   }
 }
 
+// Only an exact "<environment>/<run id>": deleting never picks a run by shorthand.
+function deleteRun(spec) {
+  const [envSpec, runId] = String(spec || "").split("/");
+  const environment = envSpec && store.findEnvironment(historyRoot(), envSpec);
+  if (!environment || !runId) {
+    throw new Error("Give the run as <environment>/<run id>, as --list shows it");
+  }
+  const result = store.deleteRun(environment.dir, runId);
+  console.log(`[COMPARE] Deleted run ${runId} of ${store.label(environment)}` +
+              (result.environmentRemoved ? "; it was its last run" : ""));
+}
+
 async function main(args) {
   if (args.length === 0) return require("./app-server").start({ tab: "history" });
   settings.load();
   migrate();
   if (args[0] === "--list") return printList();
+  if (args[0] === "--delete") return deleteRun(args[1]);
   if (args.length !== 2) {
     console.log("Usage: compare.bat <before> <after>   (e.g. prod~1 prod, or stage prod)\n" +
                 "       compare.bat --list             environments and runs\n" +
+                "       compare.bat --delete <environment>/<run id>\n" +
                 "       compare.bat                    the compare page");
     process.exitCode = 1;
     return;

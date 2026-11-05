@@ -106,7 +106,10 @@ function getChildNames(data, parentPath = "") {
         value === null ||
         typeof value !== "object" ||
         Array.isArray(value) ||
-        key.startsWith(":")
+        key.startsWith(":") ||
+        // Access control (rep:policy, rep:repoPolicy, …): not configuration,
+        // and AEM answers 404 for it to most users.
+        key.startsWith("rep:")
       ) {
         return false;
       }
@@ -163,7 +166,9 @@ function encodePath(resourcePath) {
 // Fetches resourcePath as Sling JSON `levels` deep. Returns { data, levels }:
 // Sling answers 300 when a deep tree exceeds its result limit, in which case
 // this falls back to a single level.
-async function requestJson(resourcePath, levels = 1) {
+// quiet: a missing node is an answer, not an error (checking whether a
+// referenced policy exists); the caller reports it.
+async function requestJson(resourcePath, levels = 1, { quiet = false } = {}) {
   const url = new URL(
     `${author}${encodePath(resourcePath)}.${levels}.json`
   );
@@ -186,11 +191,11 @@ async function requestJson(resourcePath, levels = 1) {
   if (response.status === 300 && levels > 1) {
     await response.body?.cancel();
     log("INFO", `Tree too large at .${levels}.json; retrying one level`);
-    return requestJson(resourcePath, 1);
+    return requestJson(resourcePath, 1, { quiet });
   }
 
   if (!response.ok) {
-    log("ERROR", `HTTP ${response.status} | ${resourcePath}`);
+    if (!quiet) log("ERROR", `HTTP ${response.status} | ${resourcePath}`);
     throw new Error(`HTTP ${response.status}`);
   }
 
@@ -264,7 +269,12 @@ async function visit({ path: resourcePath, depth }, section) {
       error: error.message
     });
 
-    log("FAILED", `${resourcePath}: ${error.message}`);
+    const hint = {
+      "HTTP 401": "the token was rejected (expired?)",
+      "HTTP 403": "this token's user may not read it",
+      "HTTP 404": "listed by its parent but not readable: usually permissions, or a node AEM doesn't render as JSON"
+    }[error.message];
+    log("FAILED", `${resourcePath}: ${error.message}` + (hint ? ` (${hint})` : ""));
 
     return [];
   }
@@ -477,21 +487,33 @@ async function verifyPolicyReferences(references) {
     )
   ];
 
-  console.log(
-    `[AEM] Verifying ${unresolvedPaths.length} unique unresolved policies`
-  );
+  if (unresolvedPaths.length) {
+    console.log(
+      `[CHECK] ${unresolvedPaths.length === 1 ? "1 policy that a template refers to wasn't"
+        : `${unresolvedPaths.length} policies that templates refer to weren't`} in the export; ` +
+      "checking whether they exist in AEM"
+    );
+  }
+
+  // Where each policy is used, to name it in the result: "article › root/teaser".
+  const usedBy = policyPath => [...new Set(references
+    .filter(ref => ref.resolvedPolicyPath === policyPath)
+    .map(ref => {
+      const [template, location = ""] = ref.templatePath.slice(templateRoot.length + 1).split("/policies/jcr:content");
+      return `${template} › ${location.replace(/^\//, "") || "(page)"}`;
+    }))].join(", ");
 
   const results = new Map();
 
   for (const policyPath of unresolvedPaths) {
     try {
-      await requestJson(policyPath, 0);
+      await requestJson(policyPath, 0, { quiet: true });
 
       results.set(policyPath, {
         status: "Exists in AEM - Not Exported"
       });
 
-      console.log(`[AEM] EXISTS: ${policyPath}`);
+      console.log(`[CHECK] Exists outside the exported policy root: ${policyPath} (used by ${usedBy(policyPath)})`);
 
     } catch (error) {
       const message = error.message || String(error);
@@ -505,9 +527,11 @@ async function verifyPolicyReferences(references) {
         verificationError: message
       });
 
-      console.warn(
-        `[AEM] ${status}: ${policyPath} (${message})`
-      );
+      console.warn(status === "Not Found in AEM"
+        ? `[CHECK] Missing in AEM: ${policyPath}\n` +
+          `        Used by template ${usedBy(policyPath)}: the template points to a policy that doesn't exist. ` +
+          "Fix the template's policy for that component, or ignore it if the component isn't used."
+        : `[CHECK] Couldn't check ${policyPath} (${message}); used by ${usedBy(policyPath)}`);
     }
   }
 

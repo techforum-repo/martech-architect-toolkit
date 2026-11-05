@@ -197,6 +197,22 @@ function pruneRuns(environmentDir, keep, protect = null) {
   return removed.length;
 }
 
+const RUN_ID_PATTERN = /^\d{4}-\d{2}-\d{2}_\d{6}Z(-\d+)?$/;
+
+// Deletes one run (its workbook and data). A run still in progress can't be
+// deleted; one stopped long ago (interrupted) can. An environment left with
+// no runs is removed too: it comes back with its next run.
+function deleteRun(environmentDir, id) {
+  if (!RUN_ID_PATTERN.test(String(id))) throw new Error("Not a run id: " + id);
+  const run = listRuns(environmentDir).find(item => item.id === id);
+  if (!run) throw new Error("No run " + id);
+  if (run.meta.status === "running") throw new Error(`Run ${id} is still running`);
+  fs.rmSync(run.dir, { recursive: true, force: true });
+  const environmentRemoved = listRuns(environmentDir).length === 0;
+  if (environmentRemoved) fs.rmSync(environmentDir, { recursive: true, force: true });
+  return { deleted: id, environmentRemoved };
+}
+
 function workbookFile(dir) {
   const name = fs.existsSync(dir) && fs.readdirSync(dir).find(file => file.endsWith(".xlsx"));
   return name ? path.join(dir, name) : null;
@@ -263,7 +279,7 @@ function migrateLegacy(root, legacyDir) {
 }
 
 module.exports = {
-  FILES, RUN_FILE, cleanName, createRun, cssSummary, environmentId, environmentsDir, findEnvironment, label,
+  FILES, RUN_FILE, cleanName, createRun, cssSummary, deleteRun, environmentId, environmentsDir, findEnvironment, label,
   listEnvironments, listRuns, loadRun, migrateLegacy, pruneRuns, readJson, registerEnvironment, runId, updateRun,
   workbookFile, writeJson
 };

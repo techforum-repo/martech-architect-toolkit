@@ -155,3 +155,19 @@ test("runs: one at a time per settings file, with its log; cancel stops it", asy
   }
   assert.equal(view.status, "cancelled");
 });
+
+test("deleting a run from History: guarded, only listed runs, gone afterwards", async t => {
+  const { request, post } = await app(t, 18650);
+  const prod = (await request("/api/environments")).data.find(env => env.name === "prod");
+  const oldest = prod.runs[prod.runs.length - 1].key;
+
+  assert.equal((await post("/api/runs/delete", { run: oldest }, { "X-App-Key": "wrong" })).status, 403);
+  assert.equal((await post("/api/runs/delete", { run: "../../etc" })).status, 404);
+  const deleted = await post("/api/runs/delete", { run: oldest });
+  assert.equal(deleted.status, 200);
+  assert.equal(deleted.data.environmentRemoved, false);
+
+  const after = (await request("/api/environments")).data.find(env => env.name === "prod");
+  assert.deepEqual(after.runs.map(run => run.key).includes(oldest), false);
+  assert.equal((await request("/api/workbook?run=" + encodeURIComponent(oldest))).status, 404);
+});

@@ -30,7 +30,7 @@ Ctrl+C stops it, and any export it started.
 | Tab | |
 |---|---|
 | **Run** | Pick an environment, **Run export**, and follow the log as it runs. When it's done: the run's status, **Download workbook**, and **Show changes** since the previous run. Cancel stops a run. One run at a time per environment |
-| **History** | An environment's runs: status, changes since the previous run, the settings file and machine it ran on, workbook download. Pick any two to compare |
+| **History** | An environment's runs: status, changes since the previous run, the settings file and machine it ran on, workbook download. Pick any two to compare, or delete a run |
 | **Compare environments** | A run of one environment against a run of another, e.g. prod and stage |
 | **Settings** | Add and edit environments: author URL, token, roots, front end and limits. **Test connection** makes one read from AEM with the token and says whether it works |
 
@@ -116,6 +116,12 @@ complete and incomplete runs are compared. The last `HISTORY_KEEP` runs (default
 files are removed once the workbook is written (`KEEP_RAW_DATA=true` keeps them);
 comparisons use the theme tokens and CSS fingerprints saved with each run.
 
+To delete a run (its workbook and data), use **Delete** in the History tab (it
+asks to confirm) or `compare.bat --delete prod/2026-11-05_103012Z` with the run
+id `--list` shows. A run still in progress can't be deleted; an environment's
+folder goes with its last run. With a shared history, a deleted run is gone for
+everyone.
+
 Exports saved by an earlier version (`output/history/`) are moved into this
 layout on the next export or compare.
 
@@ -134,7 +140,19 @@ changed once finished, so people can export at the same time.
   content aren't read.
 - A template policy reference that doesn't resolve to an exported policy is
   checked in AEM, and marks the export incomplete (exit code 2); see
-  `missingReferences` in `validation-report.json`.
+  `missingReferences` in `validation-report.json`. The log names it:
+
+  ```
+  [CHECK] Missing in AEM: /conf/site/settings/wcm/policies/site/components/page/policy_123
+          Used by template article › (page): the template points to a policy that doesn't exist. …
+  ```
+
+  AEM answers 404 for such a policy; that's the finding, not a failed export.
+  Fix the template's policy for that component in the template editor, or
+  ignore it if the component isn't used.
+- Access-control nodes (`rep:policy`, …) aren't read. A `[FAILED] … HTTP 404`
+  line during the crawl means a node was listed but couldn't be read, usually
+  because of the token user's permissions; the run is then incomplete.
 
 ### Front-end CSS
 
@@ -196,6 +214,7 @@ On the command line (`npm run compare -- …` works too):
 compare.bat --list          # environments and their runs
 compare.bat prod~1 prod     # over time: the previous prod run against the latest
 compare.bat prod stage      # between environments: latest of each
+compare.bat --delete prod/2026-11-05_103012Z   # delete that run
 ```
 
 A run is `<environment>` (its latest complete or incomplete run),
