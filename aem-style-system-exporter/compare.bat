@@ -1,6 +1,6 @@
 @echo off
-rem Opens the compare page (what changed between two saved exports) in the
-rem browser. With arguments, compares on the command line instead:
+rem Opens the app on its History tab. With arguments, compares on the
+rem command line instead:
 rem   compare.bat --list
 rem   compare.bat <before> <after>
 setlocal

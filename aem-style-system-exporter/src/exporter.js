@@ -21,7 +21,7 @@ const fetchDepth = Number(process.env.FETCH_DEPTH || 3);
 const concurrency = Number(process.env.CONCURRENCY || 4);
 
 if (!author || !token || !policyRoot || !templateRoot) {
-  throw new Error("Missing required AEM configuration in .env");
+  throw new Error("Missing AEM_AUTHOR_URL, AEM_LOCAL_TOKEN, AEM_POLICY_ROOT or AEM_TEMPLATE_ROOT in the settings file");
 }
 
 if (!/^https:\/\//.test(author)) {

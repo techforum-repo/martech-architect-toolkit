@@ -3,9 +3,9 @@
 Exports an AEM site's Style System into Excel: every component policy and its
 styles, the templates that use each policy, and optionally the front-end CSS
 those styles' classes reach and the theme tokens (CSS custom properties). Every
-export is kept, so each workbook lists what changed since the last one, and a
-compare page shows the differences between any two: on one environment over time,
-or between environments such as stage and prod.
+export is kept, so each workbook lists what changed since the last one. A local
+app runs exports, manages each environment's settings, and compares any two
+runs: on one environment over time, or between environments such as stage and prod.
 
 All AEM access is read-only `GET` requests.
 
@@ -16,10 +16,42 @@ All AEM access is read-only `GET` requests.
   site's `/conf` policies and templates
 - Optional: the front-end project, for theme CSS and tokens
 
+## Start
+
+```
+start.bat           # Windows
+sh start.sh         # macOS / Linux
+```
+
+Opens the app at `http://127.0.0.1:8510/` (the next free port if it's taken;
+`COMPARE_UI_PORT` in `.env` to change). Keep the console open while using it;
+Ctrl+C stops it, and any export it started.
+
+| Tab | |
+|---|---|
+| **Run** | Pick an environment, **Run export**, and follow the log as it runs. When it's done: the run's status, **Download workbook**, and **Show changes** since the previous run. Cancel stops a run. One run at a time per environment |
+| **History** | An environment's runs: status, changes since the previous run, the settings file and machine it ran on, workbook download. Pick any two to compare |
+| **Compare environments** | A run of one environment against a run of another, e.g. prod and stage |
+| **Settings** | Add and edit environments: author URL, token, roots, front end and limits. **Test connection** makes one read from AEM with the token and says whether it works |
+
+The comparison shows counts per area, filters by area, change type or text, and
+downloads as Excel. The address keeps the tab and the two runs, so it can be
+bookmarked.
+
+The app runs on this machine only. It answers only requests addressed to
+`127.0.0.1` / `localhost`, and anything that changes something (saving
+settings, running, cancelling, testing a connection) needs a key only the page
+it served has, so another website can't trigger it. The token is write-only:
+the app shows whether it's set and when it expires, never the value.
+
+Everything the app does is also available without it (below), e.g. for
+scheduled exports.
+
 ## Setup
 
-One settings file per environment: copy `.env.example` to `.env.prod`,
-`.env.stage`, … (or `.env` if you only use one). In each:
+Add environments under **Settings** in the app, or by hand: one settings file
+per environment, `.env.prod`, `.env.stage`, … copied from `.env.example` (or
+`.env` if you only use one). In each:
 
 1. Set `AEM_AUTHOR_URL` and paste the Local Development Token into
    `AEM_LOCAL_TOKEN` (no `Bearer` prefix).
@@ -40,6 +72,8 @@ one author URL: using it for another stops the run. Two settings files for the
 same author URL share one environment and its history; `AEM_ENV_NAME` renames it.
 
 ## Export
+
+From the app's **Run** tab, or:
 
 ```
 export.bat prod         # Windows: uses .env.prod
@@ -149,31 +183,14 @@ Between environments, a policy created separately on each (rather than moved
 in a content package) has a different `policy_<id>`, so it shows as removed on
 one side and added on the other; the comparison points these out.
 
-## Compare page
+## Compare
 
-```
-compare.bat         # Windows
-sh compare.sh       # macOS / Linux
-```
+In the app's **History** tab (one environment over time, by default the
+previous and latest run) or **Compare environments** tab (latest of each by
+default). `compare.bat` / `sh compare.sh` without arguments opens the app on
+History.
 
-Opens `http://127.0.0.1:8510/` in the browser (`COMPARE_UI_PORT` to change; the
-next free port is used if it's taken). Two ways to compare:
-
-- **Over time**: pick an environment to see its runs (status, changes since the
-  previous run, machine, workbook download), then a **Before** and an **After**
-  run; by default the previous and latest.
-- **Between environments**: pick an environment and run for each side (latest
-  by default), e.g. Before: prod, After: stage for what stage has that prod
-  doesn't yet.
-
-Then filter by area, change type or text, and download the comparison as Excel.
-The address keeps the choice, so it can be bookmarked. Keep the console open
-while using the page; stop it with Ctrl+C.
-
-The page listens on this machine only, answers only requests addressed to it,
-and only reads runs it lists.
-
-The same on the command line (`npm run compare -- …` works too):
+On the command line (`npm run compare -- …` works too):
 
 ```
 compare.bat --list          # environments and their runs
@@ -209,17 +226,20 @@ result is written to `comparisons/` as a workbook and JSON.
 | `HISTORY_KEEP` | 20 | Runs kept per environment |
 | `HISTORY_DIR` | `output` | Where environments, runs and comparisons are kept, e.g. a shared folder |
 | `KEEP_RAW_DATA` | false | Keep the large front-end data files in each run |
-| `COMPARE_UI_PORT` | 8510 | First port tried by the compare page |
+| `COMPARE_UI_PORT` | 8510 | First port tried by the app |
 
-The compare page and `compare.bat` read `.env` for `HISTORY_DIR` and
-`COMPARE_UI_PORT`.
+The app and `compare.bat` read `.env` for `HISTORY_DIR` and `COMPARE_UI_PORT`,
+and pass the app's `HISTORY_DIR` to the runs they start; set it in `.env`. The
+app never loads a settings file into its own environment, so a run gets exactly
+its environment's settings.
 
 `output/` is git-ignored.
 
 ## Development
 
 ```
-npm test            # comparison, history and compare page tests (node:test)
+npm start           # the app (as start.bat)
+npm test            # store, comparison, settings and app tests (node:test)
 npm run check       # syntax check of every script
 ```
 

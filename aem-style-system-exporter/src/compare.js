@@ -19,15 +19,15 @@ const settings = require("./settings");
 const store = require("./store");
 const { changesSheet } = require("./workbook");
 
-settings.load();
-
+// Command line: HISTORY_DIR from the environment or .env. The app passes
+// its own root instead (it never loads settings files into its process).
 function historyRoot() {
   return settings.historyRoot();
 }
 
-function migrate() {
-  const moved = store.migrateLegacy(historyRoot(), path.join(settings.root, "output", "history"));
-  if (moved) console.log(`[COMPARE] Moved ${moved} earlier export(s) into ${store.environmentsDir(historyRoot())}`);
+function migrate(root = historyRoot()) {
+  const moved = store.migrateLegacy(root, path.join(settings.root, "output", "history"));
+  if (moved) console.log(`[COMPARE] Moved ${moved} earlier export(s) into ${store.environmentsDir(root)}`);
 }
 
 function resolve(spec, root = historyRoot()) {
@@ -89,8 +89,9 @@ function printList() {
 }
 
 async function main(args) {
+  if (args.length === 0) return require("./app-server").start({ tab: "history" });
+  settings.load();
   migrate();
-  if (args.length === 0) return require("./ui-server").start();
   if (args[0] === "--list") return printList();
   if (args.length !== 2) {
     console.log("Usage: compare.bat <before> <after>   (e.g. prod~1 prod, or stage prod)\n" +
@@ -112,7 +113,7 @@ async function main(args) {
   console.log(`[COMPARE] Saved ${dest}`);
 }
 
-// Exported before main runs: the compare page (ui-server.js) uses these.
+// Exported before main runs: the app (app-server.js) uses these.
 module.exports = { compareRuns, comparisonName, comparisonWorkbook, historyRoot, migrate, resolve };
 
 if (require.main === module) {

@@ -1,0 +1,30 @@
+name: aem-style-system-exporter tests
+
+on:
+  push:
+    branches: [main]
+    paths: ["aem-style-system-exporter/**", ".github/workflows/aem-style-system-exporter-tests.yml"]
+  pull_request:
+    paths: ["aem-style-system-exporter/**", ".github/workflows/aem-style-system-exporter-tests.yml"]
+
+jobs:
+  node-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aem-style-system-exporter
+    strategy:
+      matrix:
+        # 22 is the minimum the scripts accept; 24 is the current LTS.
+        node-version: ["22", "24"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      # package-lock.json is git-ignored, so install from package.json.
+      - run: npm install --no-audit --no-fund
+      - run: npm run check
+      # Store, comparison, settings and app tests; the app tests start the
+      # app on 127.0.0.1 and use a stand-in for the export, so no AEM is needed.
+      - run: npm test

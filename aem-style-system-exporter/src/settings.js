@@ -39,8 +39,8 @@ function dataDir() {
 
 // Where environments, their runs and comparisons are kept: HISTORY_DIR
 // (relative to this folder, or absolute, e.g. a shared drive) or output/.
-function historyRoot() {
-  const configured = (process.env.HISTORY_DIR || "").trim();
+function historyRoot(values = process.env) {
+  const configured = (values.HISTORY_DIR || "").trim();
   return configured ? path.resolve(root, configured) : path.join(root, "output");
 }
 

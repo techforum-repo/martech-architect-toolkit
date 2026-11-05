@@ -92,3 +92,14 @@ test("exports saved in the earlier layout are moved into their environment", () 
   assert.ok(fs.existsSync(path.join(run.dir, store.FILES.policies)));
   assert.ok(fs.existsSync(path.join(run.dir, store.FILES.tokens)));
 });
+
+test("a run still running after 12 hours shows as interrupted, and isn't compared", () => {
+  const root = tempRoot();
+  const env = store.registerEnvironment(root, { author: PROD });
+  const old = store.createRun(env, {}, new Date(Date.now() - 13 * 3600 * 1000));
+  const now = store.createRun(env, {});
+  assert.deepEqual(store.listRuns(env.dir).map(r => r.meta.status), ["interrupted", "running"]);
+  assert.equal(store.listRuns(env.dir)[0].meta.error, "Stopped before it finished");
+  assert.deepEqual(store.listRuns(env.dir, { usable: true }), []);
+  assert.ok(old && now);
+});

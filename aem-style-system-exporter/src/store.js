@@ -32,6 +32,9 @@ const FILES = {
 };
 
 const USABLE = new Set(["complete", "incomplete"]);
+// A run still "running" after this long was stopped without finishing (the
+// console closed, the machine slept): shown as interrupted, never compared.
+const INTERRUPTED_AFTER_MS = 12 * 60 * 60 * 1000;
 
 function readJson(file, fallback = null) {
   try {
@@ -169,7 +172,11 @@ function listRuns(environmentDir, { usable = false } = {}) {
     .map(entry => entry.name).sort()
     .map(id => ({ id, dir: path.join(environmentDir, id) }))
     .map(item => ({ ...item, meta: readJson(path.join(item.dir, RUN_FILE)) }))
-    .filter(item => item.meta && (!usable || USABLE.has(item.meta.status)));
+    .filter(item => item.meta)
+    .map(item => item.meta.status === "running" && Date.now() - Date.parse(item.meta.createdAt) > INTERRUPTED_AFTER_MS
+      ? { ...item, meta: { ...item.meta, status: "interrupted", error: item.meta.error || "Stopped before it finished" } }
+      : item)
+    .filter(item => !usable || USABLE.has(item.meta.status));
 }
 
 // What a comparison needs from a run (see diff.js).

@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="app-key" content="__APP_KEY__">
+<title>Style System Exporter</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #5d6676; --line: #dfe3ea;
+  --accent: #183a5b; --accent-text: #ffffff; --focus: #2f6fb3; --row-hover: #f2f6fb;
+  --added: #1e7d4f; --added-bg: #e5f4ec; --removed: #b3261e; --removed-bg: #fbe9e7;
+  --changed: #8a5a00; --changed-bg: #fdf3dc; --note-bg: #eef3fb; --neutral-bg: #eceff4;
+  --log-bg: #10151d; --log-text: #d8dee9;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15181e; --panel: #1d2129; --text: #e6e9ef; --muted: #9aa3b2; --line: #313744;
+    --accent: #3d6b99; --accent-text: #ffffff; --focus: #7fb0e6; --row-hover: #232a35;
+    --added: #6fcf97; --added-bg: #183326; --removed: #f2998e; --removed-bg: #3a1d1b;
+    --changed: #f0c36a; --changed-bg: #3a2f17; --note-bg: #1f2a3a; --neutral-bg: #2a303b;
+    --log-bg: #0b0e13; --log-text: #d8dee9;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { background: var(--accent); color: var(--accent-text); padding: 12px 24px; }
+header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+header p { margin: 2px 0 0; opacity: .85; font-size: 13px; }
+nav { background: var(--panel); border-bottom: 1px solid var(--line); padding: 0 24px; display: flex; gap: 4px; overflow-x: auto; }
+.tab { border: 0; border-bottom: 3px solid transparent; border-radius: 0; background: none; padding: 12px 14px;
+  color: var(--muted); font-weight: 600; white-space: nowrap; }
+.tab[aria-selected=true] { color: var(--text); border-bottom-color: var(--accent); }
+main { max-width: 1400px; margin: 0 auto; padding: 20px 24px 40px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.panel h2 { margin: 0 0 12px; font-size: 15px; }
+label, .label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .03em; }
+select, input[type=search], input[type=text], input[type=password] { width: 100%; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; }
+button { font: inherit; border-radius: 6px; padding: 8px 14px; cursor: pointer; border: 1px solid var(--line);
+  background: var(--panel); color: var(--text); }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+button.danger { color: var(--removed); }
+button:disabled { opacity: .5; cursor: default; }
+button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+a { color: var(--focus); }
+.row { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
+.grow { flex: 1; min-width: 220px; }
+.actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
+.hint { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+.muted { color: var(--muted); }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px 20px; margin-top: 12px; }
+.facts div > span:last-child { word-break: break-all; }
+.status { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; display: inline-block; }
+.status.complete { color: var(--added); background: var(--added-bg); }
+.status.incomplete, .status.warnings { color: var(--changed); background: var(--changed-bg); }
+.status.failed, .status.cancelled, .status.interrupted { color: var(--removed); background: var(--removed-bg); }
+.status.running { color: var(--muted); background: var(--neutral-bg); }
+pre.log { background: var(--log-bg); color: var(--log-text); border-radius: 8px; padding: 12px; margin: 12px 0 0;
+  max-height: 420px; overflow: auto; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; word-break: break-all; }
+.pair { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: end; }
+.side { display: grid; gap: 8px; }
+.side h3 { margin: 0; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.runs td.pick, .runs th.pick { width: 64px; text-align: center; }
+.runs tr.unusable td { color: var(--muted); }
+.runs tbody tr:hover { background: var(--row-hover); }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.card { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--panel); }
+.card h3 { margin: 0 0 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.badge { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.Added { color: var(--added); background: var(--added-bg); }
+.Removed { color: var(--removed); background: var(--removed-bg); }
+.Changed { color: var(--changed); background: var(--changed-bg); }
+.notes { margin: 12px 0 0; padding: 0; list-style: none; }
+.notes li { background: var(--note-bg); border-radius: 6px; padding: 8px 12px; margin-top: 6px; }
+.filters { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-bottom: 10px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { padding: 4px 10px; border-radius: 999px; font-size: 13px; }
+.chip[aria-pressed=true] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.search { flex: 1; min-width: 200px; }
+.count { color: var(--muted); font-size: 13px; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+table { width: 100%; border-collapse: collapse; background: var(--panel); }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+th { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+td.item { font-weight: 600; word-break: break-word; }
+td.details { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12.5px; word-break: break-word; }
+td.who { color: var(--muted); font-size: 12.5px; }
+.settings { display: grid; grid-template-columns: 240px 1fr; gap: 16px; align-items: start; }
+.profile-list { display: grid; gap: 6px; }
+.profile-list button { text-align: left; }
+.profile-list button[aria-current=true] { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.profile-list small { display: block; color: var(--muted); font-size: 12px; }
+fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 0 0 12px; }
+legend { font-weight: 600; padding: 0 6px; }
+.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.field-error { color: var(--removed); font-size: 12.5px; margin-top: 4px; }
+.check { display: flex; gap: 8px; align-items: center; text-transform: none; font-size: 14px; color: var(--text); letter-spacing: 0; }
+.message { margin-top: 10px; padding: 8px 12px; border-radius: 6px; background: var(--note-bg); }
+.message.ok { background: var(--added-bg); color: var(--added); }
+.message.bad { background: var(--removed-bg); color: var(--removed); }
+.empty { text-align: center; color: var(--muted); padding: 32px 16px; }
+.error { color: var(--removed); }
+@media (max-width: 760px) {
+  main, nav { padding-left: 16px; padding-right: 16px; }
+  .pair, .settings { grid-template-columns: 1fr; }
+  .changes .table-wrap { border: 0; overflow: visible; }
+  .changes table, .changes tbody, .changes tr, .changes td { display: block; width: 100%; }
+  .changes thead { display: none; }
+  .changes tr { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 10px; padding: 6px 0; }
+  .changes td { border: 0; padding: 4px 12px; }
+  .changes td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; font-weight: 600;
+    color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+  .changes td.who:empty { display: none; }
+  .hide-narrow { display: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>AEM Style System Exporter</h1>
+  <p>Export policies, templates and styles from AEM, keep every run, and see what changed.</p>
+</header>
+<nav role="tablist">
+  <button class="tab" role="tab" data-tab="run" aria-selected="true">Run</button>
+  <button class="tab" role="tab" data-tab="history" aria-selected="false">History</button>
+  <button class="tab" role="tab" data-tab="compare" aria-selected="false">Compare environments</button>
+  <button class="tab" role="tab" data-tab="settings" aria-selected="false">Settings</button>
+</nav>
+<main>
+  <!-- Run -->
+  <section data-panel="run">
+    <div class="panel">
+      <div class="row">
+        <div class="grow"><label for="runProfile">Environment</label><select id="runProfile"></select></div>
+        <button class="primary" id="runStart">Run export</button>
+      </div>
+      <div class="facts" id="runFacts"></div>
+    </div>
+    <div class="panel" id="jobPanel" hidden>
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <h2 style="margin:0" id="jobTitle"></h2>
+        <div class="actions" style="margin:0">
+          <span id="jobStatus"></span>
+          <button class="danger" id="jobCancel">Cancel</button>
+        </div>
+      </div>
+      <div class="actions" id="jobResult"></div>
+      <pre class="log" id="jobLog" aria-live="polite"></pre>
+    </div>
+    <div class="panel" id="jobsPanel" hidden>
+      <h2>Runs started here</h2>
+      <div class="table-wrap"><table><thead><tr><th>Environment</th><th>Started</th><th>Status</th><th></th></tr></thead>
+        <tbody id="jobsRows"></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- History -->
+  <section data-panel="history" hidden>
+    <div class="panel">
+      <div class="row"><div class="grow"><label for="timeEnv">Environment</label><select id="timeEnv"></select></div></div>
+      <div class="table-wrap" style="margin-top:12px">
+        <table class="runs">
+          <thead><tr><th class="pick">Before</th><th class="pick">After</th><th>Run</th><th>Status</th>
+            <th>Changes since previous</th><th class="hide-narrow">Settings · machine</th><th>Workbook</th></tr></thead>
+          <tbody id="timeRuns"></tbody>
+        </table>
+      </div>
+      <p class="hint">Pick a Before and an After run to compare. Failed runs can't be compared.</p>
+      <div class="actions"><button class="primary" id="timeCompare">Compare</button></div>
+    </div>
+  </section>
+
+  <!-- Compare environments -->
+  <section data-panel="compare" hidden>
+    <div class="panel">
+      <div class="pair">
+        <div class="side">
+          <h3>Before</h3>
+          <div><label for="envA">Environment</label><select id="envA"></select></div>
+          <div><label for="runA">Run</label><select id="runA"></select></div>
+        </div>
+        <button id="envSwap" title="Swap before and after" aria-label="Swap before and after">⇄</button>
+        <div class="side">
+          <h3>After</h3>
+          <div><label for="envB">Environment</label><select id="envB"></select></div>
+          <div><label for="runB">Run</label><select id="runB"></select></div>
+        </div>
+      </div>
+      <p class="hint">E.g. Before: prod, After: stage shows what stage has that prod doesn't yet.</p>
+      <div class="actions"><button class="primary" id="envCompare">Compare</button></div>
+    </div>
+  </section>
+
+  <!-- Results of History and Compare -->
+  <section id="result" class="changes" hidden>
+    <div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <p class="muted" id="compared" style="margin:0"></p>
+      <button id="download">Download comparison (Excel)</button>
+    </div>
+    <div class="cards" id="cards"></div>
+    <ul class="notes" id="notes"></ul>
+    <div class="panel" style="margin-top:16px">
+      <div class="filters">
+        <div class="chips" id="areaChips" role="group" aria-label="Areas"></div>
+        <div class="chips" id="changeChips" role="group" aria-label="Change types"></div>
+        <div class="search"><input type="search" id="search" placeholder="Filter by name, path, class or value" aria-label="Filter changes"></div>
+        <span class="count" id="count"></span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Area</th><th>Change</th><th>Item</th><th>Details</th><th>Last modified</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Settings -->
+  <section data-panel="settings" hidden>
+    <div class="settings">
+      <div class="panel">
+        <h2>Environments</h2>
+        <div class="profile-list" id="profileList"></div>
+        <div class="actions"><button id="profileNew">+ New environment</button></div>
+      </div>
+      <div class="panel">
+        <form id="profileForm" novalidate>
+          <div class="fields" style="margin-bottom:12px">
+            <div><label for="profileKey">Name</label><input type="text" id="profileKey" placeholder="prod" autocomplete="off">
+              <div class="field-error" data-error="key"></div></div>
+          </div>
+          <div id="profileFields"></div>
+          <div class="actions">
+            <button class="primary" type="submit">Save</button>
+            <button type="button" id="profileTest">Test connection</button>
+          </div>
+          <div id="profileMessage"></div>
+        </form>
+        <p class="hint" id="settingsHint"></p>
+      </div>
+    </div>
+  </section>
+
+  <p class="empty" id="message"></p>
+</main>
+<script>
+const KEY = document.querySelector('meta[name="app-key"]').content;
+const AREAS = ["Template", "Template policy", "Policy", "Style", "Theme token", "Style CSS"];
+const CHANGES = ["Added", "Removed", "Changed"];
+const USABLE = new Set(["complete", "incomplete"]);
+const $ = id => document.getElementById(id);
+const el = (tag, props = {}, ...children) => {
+  const node = Object.assign(document.createElement(tag), props);
+  for (const child of children) if (child !== null && child !== undefined && child !== "") node.append(child);  // text, never HTML
+  return node;
+};
+const state = { environments: [], profiles: [], fields: [], historyRoot: "", jobs: [], current: null,
+                lastQuery: "", job: null, jobFrom: 0, editing: null };
+const filters = { areas: new Set(), changes: new Set(), text: "" };
+
+const when = iso => iso ? iso.slice(0, 19).replace("T", " ") + " UTC" : "";
+const usableRuns = env => env.runs.filter(run => USABLE.has(run.status));
+const envById = id => state.environments.find(env => env.id === id);
+
+function message(text, isError = false) {
+  $("message").textContent = text;
+  $("message").className = "empty" + (isError ? " error" : "");
+}
+
+async function api(path, body) {
+  const options = body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json", "X-App-Key": KEY }, body: JSON.stringify(body)
+  };
+  const response = await fetch(path, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(new Error(data.error || response.statusText), { data, status: response.status });
+  return data;
+}
+
+function statusBadge(status, title = "") {
+  const badge = el("span", { className: "status " + status }, status);
+  if (title) badge.title = title;
+  return badge;
+}
+
+// --- Tabs -------------------------------------------------------------------------
+
+function showTab(tab, { keepHash = false } = {}) {
+  for (const button of document.querySelectorAll(".tab")) button.setAttribute("aria-selected", button.dataset.tab === tab);
+  for (const panel of document.querySelectorAll("[data-panel]")) panel.hidden = panel.dataset.panel !== tab;
+  const comparing = tab === "history" || tab === "compare";
+  $("result").hidden = !(comparing && state.current && state.current.mode === tab);
+  message("");
+  if (!keepHash) history.replaceState(null, "", "#tab=" + tab);
+  if (tab === "history") renderTimeline();
+  if (tab === "settings" && !state.editing) editProfile(state.profiles[0]?.key || null);
+}
+
+// --- Run --------------------------------------------------------------------------
+
+function profileByKey(key) { return state.profiles.find(p => p.key === key); }
+
+function renderRunTab() {
+  const select = $("runProfile");
+  const selected = select.value;
+  select.replaceChildren(...state.profiles.map(p =>
+    el("option", { value: p.key }, (p.environment || p.key) + (p.key !== "default" && p.environment && !p.environment.startsWith(p.key) ? `  (.env.${p.key})` : ""))));
+  if (profileByKey(selected)) select.value = selected;
+  $("runStart").disabled = !state.profiles.length;
+  if (!state.profiles.length) {
+    $("runFacts").replaceChildren(el("p", { className: "muted" }, "No environments yet. Add one under Settings."));
+    return;
+  }
+  const profile = profileByKey(select.value);
+  const token = profile.token.set
+    ? (profile.token.expires ? (new Date(profile.token.expires) < new Date() ? "expired " : "expires ") + when(profile.token.expires) : "set")
+    : "not set";
+  const last = profile.lastRun;
+  const fact = (label, ...value) => el("div", {}, el("span", { className: "label" }, label), el("span", {}, ...value));
+  $("runFacts").replaceChildren(
+    fact("Author", profile.values.AEM_AUTHOR_URL || "—"),
+    fact("Settings file", profile.file),
+    fact("Token", token),
+    fact("Last run", ...(last ? [statusBadge(last.status, last.error || ""), " " + when(last.createdAt)] : ["none yet"])));
+  const running = state.jobs.find(job => job.profile === profile.key && job.status === "running");
+  $("runStart").disabled = Boolean(running);
+  $("runStart").textContent = running ? "Running…" : "Run export";
+}
+
+async function startRun() {
+  try {
+    const job = await api("/api/jobs", { profile: $("runProfile").value });
+    watchJob(job);
+  } catch (error) {
+    message("Couldn't start: " + error.message, true);
+  }
+}
+
+function watchJob(job) {
+  state.job = job;
+  state.jobFrom = 0;
+  $("jobLog").textContent = "";
+  $("jobPanel").hidden = false;
+  pollJob();
+}
+
+async function pollJob() {
+  const watched = state.job;
+  if (!watched) return;
+  let job;
+  try {
+    job = await api(`/api/jobs/${watched.id}?from=${state.jobFrom}`);
+  } catch {
+    return setTimeout(pollJob, 2000);
+  }
+  if (state.job?.id !== watched.id) return;
+  state.jobFrom = job.lineCount;
+  const log = $("jobLog");
+  const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+  if (job.lines.length) log.append(job.lines.join("\n") + "\n");
+  if (atEnd) log.scrollTop = log.scrollHeight;
+  if (job.status === "running") {
+    renderJob(job);
+    setTimeout(pollJob, 1000);
+  } else {
+    await refresh();  // the finished run is listed now: its workbook and changes can be linked
+    renderJob(job);
+  }
+}
+
+function renderJob(job) {
+  const profile = profileByKey(job.profile);
+  $("jobTitle").textContent = `Export: ${profile?.environment || job.profile}, started ${when(job.startedAt)}`;
+  // The export's own outcome; the run's status (complete / incomplete) shows below once listed.
+  const outcome = { running: "running", complete: "finished", warnings: "finished with warnings",
+                    failed: "failed", cancelled: "cancelled" }[job.status] || job.status;
+  $("jobStatus").replaceChildren(el("span", { className: "status " + job.status }, outcome));
+  $("jobCancel").hidden = job.status !== "running";
+  const result = [];
+  if (job.status !== "running" && job.runKey) {
+    const [envId, runId] = job.runKey.split("/");
+    const run = envById(envId)?.runs.find(r => r.id === runId);
+    if (run?.workbook) result.push(el("a", { href: "/api/workbook?" + new URLSearchParams({ run: job.runKey }) }, "Download workbook"));
+    if (run?.changes?.comparedWith) {
+      const show = el("button", { type: "button" }, `Show ${run.changes.total} change(s) since the previous run`);
+      show.onclick = () => {
+        showTab("history");
+        $("timeEnv").value = envId;
+        renderTimeline();
+        compare({ before: `${envId}/${run.changes.comparedWith}`, after: job.runKey }, "history");
+      };
+      result.push(show);
+    } else if (run && USABLE.has(run.status)) {
+      result.push(el("span", { className: "muted" }, "First run of this environment: the next one will list what changed."));
+    }
+  }
+  $("jobResult").replaceChildren(...result);
+  $("jobResult").hidden = !result.length;
+}
+
+function renderJobs() {
+  $("jobsPanel").hidden = !state.jobs.length;
+  $("jobsRows").replaceChildren(...state.jobs.map(job => {
+    const view = el("button", { type: "button" }, "Show log");
+    view.onclick = () => watchJob(job);
+    return el("tr", {}, el("td", {}, profileByKey(job.profile)?.environment || job.profile),
+              el("td", {}, when(job.startedAt)), el("td", {}, statusBadge(job.status)), el("td", {}, view));
+  }));
+}
+
+// --- History (one environment over time) -----------------------------------------------------
+
+function envOptions(select) {
+  const selected = select.value;
+  select.replaceChildren(...state.environments.map(env =>
+    el("option", { value: env.id }, `${env.label}  (${usableRuns(env).length} run${usableRuns(env).length === 1 ? "" : "s"})`)));
+  if (envById(selected)) select.value = selected;
+}
+
+function renderTimeline() {
+  const env = envById($("timeEnv").value);
+  $("timeCompare").disabled = !env || usableRuns(env).length < 2;
+  if (!env) {
+    $("timeRuns").replaceChildren();
+    return message("No runs yet: start one on the Run tab.");
+  }
+  const usable = usableRuns(env);
+  const pick = (name, run, checked) => {
+    const input = el("input", { type: "radio", name, value: run.key, checked, disabled: !USABLE.has(run.status) });
+    input.setAttribute("aria-label", `${name === "before" ? "Before" : "After"}: ${when(run.createdAt)}`);
+    return input;
+  };
+  $("timeRuns").replaceChildren(...env.runs.map(run => {
+    const changes = run.changes?.comparedWith ? `${run.changes.total} since ${run.changes.comparedWith}`
+      : USABLE.has(run.status) ? "first run" : "";
+    return el("tr", { className: USABLE.has(run.status) ? "" : "unusable" },
+      el("td", { className: "pick" }, pick("before", run, run.key === usable[1]?.key)),
+      el("td", { className: "pick" }, pick("after", run, run.key === usable[0]?.key)),
+      el("td", {}, when(run.createdAt)),
+      el("td", {}, statusBadge(run.status, run.error || ""), run.error ? el("div", { className: "muted" }, run.error) : ""),
+      el("td", { className: "muted" }, changes),
+      el("td", { className: "muted hide-narrow" }, [run.settingsFile, run.machine].filter(Boolean).join(" · ")),
+      el("td", {}, run.workbook ? el("a", { href: "/api/workbook?" + new URLSearchParams({ run: run.key }) }, "Download") : ""));
+  }));
+}
+
+function timeSelection() {
+  const value = name => document.querySelector(`input[name=${name}]:checked`)?.value || "";
+  return { before: value("before"), after: value("after") };
+}
+
+// --- Compare environments -----------------------------------------------------------------
+
+function runOptions(select, envId) {
+  const env = envById(envId);
+  select.replaceChildren(...(env ? usableRuns(env) : []).map((run, i) =>
+    el("option", { value: run.key }, when(run.createdAt) + (i === 0 ? "  (latest)" : "") +
+                                     (run.status === "incomplete" ? "  (incomplete)" : ""))));
+}
+
+function setupCompare() {
+  envOptions($("envA"));
+  envOptions($("envB"));
+  const withRuns = state.environments.filter(env => usableRuns(env).length);
+  if (!$("envA").dataset.touched) {
+    $("envA").value = (withRuns[1] || withRuns[0] || {}).id || "";
+    $("envB").value = (withRuns[0] || {}).id || "";
+  }
+  runOptions($("runA"), $("envA").value);
+  runOptions($("runB"), $("envB").value);
+  $("envCompare").disabled = withRuns.length < 1;
+}
+
+// --- Results ----------------------------------------------------------------------
+
+async function compare({ before, after }, mode) {
+  if (!before || !after) return message("Pick a Before and an After run.");
+  if (before === after) return message("Before and After are the same run.");
+  state.lastQuery = new URLSearchParams({ before, after }).toString();
+  history.replaceState(null, "", "#" + new URLSearchParams({ tab: mode, before, after }));
+  message("Comparing…");
+  $("result").hidden = true;
+  try {
+    state.current = { ...(await api("/api/compare?" + state.lastQuery)), mode };
+    message("");
+    renderResult();
+  } catch (error) {
+    message("Couldn't compare: " + error.message, true);
+  }
+}
+
+function describe(meta) {
+  const env = meta.environmentName ? `${meta.environmentName} (${meta.environment})` : meta.environment;
+  return `${env}, ${when(meta.createdAt)}`;
+}
+
+function renderResult() {
+  const { comparedWith: a, current: b, counts, notes, rows } = state.current;
+  $("compared").textContent = `${describe(a)}  →  ${describe(b)}`;
+  $("cards").replaceChildren(...AREAS.filter(area => counts[area]).map(area => el("div", { className: "card" },
+    el("h3", {}, area),
+    el("div", { className: "badges" }, ...CHANGES.filter(c => counts[area][c])
+      .map(c => el("span", { className: "badge " + c }, `${counts[area][c]} ${c.toLowerCase()}`))))));
+  $("notes").replaceChildren(...notes.map(note => el("li", {}, note)));
+  chips($("areaChips"), AREAS.filter(area => counts[area]), filters.areas);
+  chips($("changeChips"), CHANGES.filter(c => rows.some(r => r.change === c)), filters.changes);
+  $("result").hidden = false;
+  if (!rows.length) message("No changes between these runs.");
+  renderRows();
+}
+
+function chips(container, values, selected) {
+  for (const value of [...selected]) if (!values.includes(value)) selected.delete(value);
+  container.replaceChildren(...values.map(value => {
+    const chip = el("button", { className: "chip", type: "button" }, value);
+    chip.setAttribute("aria-pressed", selected.has(value));
+    chip.onclick = () => {
+      selected.has(value) ? selected.delete(value) : selected.add(value);
+      chip.setAttribute("aria-pressed", selected.has(value));
+      renderRows();
+    };
+    return chip;
+  }));
+}
+
+function renderRows() {
+  const text = filters.text.toLowerCase();
+  const all = state.current.rows;
+  const shown = all.filter(row =>
+    (!filters.areas.size || filters.areas.has(row.area)) &&
+    (!filters.changes.size || filters.changes.has(row.change)) &&
+    (!text || [row.item, row.details, row.modifiedBy].join(" ").toLowerCase().includes(text)));
+  const cell = (label, props, ...children) => {
+    const td = el("td", props, ...children);
+    td.dataset.label = label;  // shown above the value on narrow screens
+    return td;
+  };
+  $("rows").replaceChildren(...shown.map(row => el("tr", {},
+    cell("Area", {}, row.area),
+    cell("Change", {}, el("span", { className: "badge " + row.change }, row.change)),
+    cell("Item", { className: "item" }, row.item),
+    cell("Details", { className: "details" }, row.details),
+    cell("Last modified", { className: "who" }, [row.modifiedBy, row.modifiedAt ? String(row.modifiedAt).slice(0, 16) : ""]
+      .filter(Boolean).join(" · ")))));
+  if (all.length && !shown.length) {
+    $("rows").append(el("tr", {}, el("td", { colSpan: 5, className: "empty" }, "No changes match these filters.")));
+  }
+  $("count").textContent = `${shown.length} of ${all.length} change(s)`;
+}
+
+// --- Settings ---------------------------------------------------------------------
+
+function renderProfileList() {
+  $("profileList").replaceChildren(...state.profiles.map(profile => {
+    const button = el("button", { type: "button" }, profile.key,
+                      el("small", {}, [profile.environment || "not run yet", profile.file, profile.token.set ? "" : "no token"]
+                        .filter(Boolean).join(" · ")));
+    button.setAttribute("aria-current", state.editing === profile.key);
+    button.onclick = () => editProfile(profile.key);
+    return button;
+  }));
+  $("settingsHint").textContent = `Settings are saved in .env.<name> in the exporter's folder (git-ignored). ` +
+    `Runs are kept in ${state.historyRoot}/environments.`;
+}
+
+function editProfile(key) {
+  state.editing = key;
+  const profile = key ? profileByKey(key) : null;
+  $("profileKey").value = key || "";
+  $("profileKey").disabled = Boolean(profile);
+  $("profileMessage").replaceChildren();
+  const groups = new Map();
+  for (const field of state.fields) groups.set(field.group, [...(groups.get(field.group) || []), field]);
+  $("profileFields").replaceChildren(...[...groups].map(([group, fields]) => {
+    const box = el("fieldset", {}, el("legend", {}, group));
+    const grid = el("div", { className: "fields" });
+    for (const field of fields) {
+      const id = "field-" + field.key;
+      const value = profile ? profile.values[field.key] ?? "" : "";
+      let input;
+      if (field.boolean) {
+        input = el("input", { type: "checkbox", id, name: field.key, checked: value === "true" });
+        grid.append(el("div", {}, el("label", { className: "check", htmlFor: id }, input, field.label),
+                       el("div", { className: "field-error" })));
+      } else {
+        input = el("input", { type: field.secret ? "password" : "text", id, name: field.key, value, autocomplete: "off",
+          placeholder: field.secret ? (profile?.token.set ? "Saved: leave empty to keep" : "Paste the token") : (field.placeholder || "") });
+        grid.append(el("div", {}, el("label", { htmlFor: id }, field.label + (field.required || field.secret ? " *" : "")),
+                       input, el("div", { className: "field-error" })));
+      }
+      input.closest("div").querySelector(".field-error").dataset.error = field.key;
+    }
+    box.append(grid);
+    return box;
+  }));
+  renderProfileList();
+}
+
+function formValues() {
+  const values = {};
+  for (const field of state.fields) {
+    const input = document.getElementsByName(field.key)[0];
+    values[field.key] = field.boolean ? String(input.checked) : input.value;
+  }
+  return values;
+}
+
+function showErrors(errors = {}) {
+  for (const node of document.querySelectorAll("[data-error]")) node.textContent = errors[node.dataset.error] || "";
+}
+
+function profileMessage(text, kind) {
+  $("profileMessage").replaceChildren(el("div", { className: "message " + (kind || "") }, text));
+}
+
+async function saveProfile(event) {
+  event.preventDefault();
+  const isNew = !state.editing;
+  const key = $("profileKey").value.trim().toLowerCase();
+  showErrors();
+  try {
+    await api("/api/profiles", { key, isNew, values: formValues() });
+    state.editing = key;
+    await refresh();
+    editProfile(key);
+    profileMessage(`Saved ${profileByKey(key)?.file || key}.`, "ok");
+  } catch (error) {
+    showErrors(error.data?.errors);
+    profileMessage(error.data?.errors ? "Check the highlighted fields." : "Couldn't save: " + error.message, "bad");
+  }
+}
+
+async function testProfile() {
+  showErrors();
+  profileMessage("Testing…");
+  try {
+    const result = await api("/api/profiles/test", { key: state.editing || $("profileKey").value.trim().toLowerCase(),
+                                                      values: formValues() });
+    profileMessage(result.message, result.ok ? "ok" : "bad");
+  } catch (error) {
+    showErrors(error.data?.errors);
+    profileMessage(error.data?.errors ? "Check the highlighted fields." : "Couldn't test: " + error.message, "bad");
+  }
+}
+
+// --- Data and start ------------------------------------------------------------------------
+
+async function refresh() {
+  const [environments, profileData, jobs] = await Promise.all([
+    api("/api/environments"), api("/api/profiles"), api("/api/jobs")]);
+  state.environments = environments;
+  state.profiles = profileData.profiles;
+  state.fields = profileData.fields;
+  state.historyRoot = profileData.historyRoot;
+  state.jobs = jobs;
+  renderRunTab();
+  renderJobs();
+  envOptions($("timeEnv"));
+  setupCompare();
+  renderProfileList();
+  const visible = document.querySelector(".tab[aria-selected=true]")?.dataset.tab;
+  if (visible === "history") renderTimeline();
+}
+
+async function init() {
+  try {
+    await refresh();
+  } catch (error) {
+    return message("Couldn't load: " + error.message, true);
+  }
+  const hash = new URLSearchParams(location.hash.slice(1));
+  const tab = ["run", "history", "compare", "settings"].includes(hash.get("tab")) ? hash.get("tab") : "run";
+  const [beforeEnv] = (hash.get("before") || "").split("/");
+  const [afterEnv] = (hash.get("after") || "").split("/");
+  if (!state.profiles.length && tab === "run") return showTab("settings");
+  showTab(tab, { keepHash: true });
+  if (tab === "compare" && envById(beforeEnv) && envById(afterEnv)) {
+    $("envA").value = beforeEnv; runOptions($("runA"), beforeEnv); $("runA").value = hash.get("before");
+    $("envB").value = afterEnv; runOptions($("runB"), afterEnv); $("runB").value = hash.get("after");
+    return compare({ before: $("runA").value, after: $("runB").value }, "compare");
+  }
+  if (tab === "history") {
+    if (envById(afterEnv)) $("timeEnv").value = afterEnv;
+    renderTimeline();
+    for (const [name, key] of [["before", hash.get("before")], ["after", hash.get("after")]]) {
+      const input = [...document.querySelectorAll(`input[name=${name}]`)].find(i => i.value === key && !i.disabled);
+      if (input) input.checked = true;
+    }
+    if (!$("timeCompare").disabled) compare(timeSelection(), "history");
+  }
+  const running = state.jobs.find(job => job.status === "running");
+  if (running) watchJob(running);
+}
+
+for (const button of document.querySelectorAll(".tab")) button.onclick = () => showTab(button.dataset.tab);
+$("runProfile").onchange = renderRunTab;
+$("runStart").onclick = startRun;
+$("jobCancel").onclick = async () => { if (state.job) await api(`/api/jobs/${state.job.id}/cancel`, {}).catch(() => {}); };
+$("timeEnv").onchange = () => { $("result").hidden = true; state.current = null; message(""); renderTimeline(); };
+$("timeCompare").onclick = () => compare(timeSelection(), "history");
+$("envA").onchange = () => { $("envA").dataset.touched = "1"; runOptions($("runA"), $("envA").value); };
+$("envB").onchange = () => { $("envA").dataset.touched = "1"; runOptions($("runB"), $("envB").value); };
+$("envCompare").onclick = () => compare({ before: $("runA").value, after: $("runB").value }, "compare");
+$("envSwap").onclick = () => {
+  $("envA").dataset.touched = "1";
+  const [a, b, ra, rb] = [$("envA").value, $("envB").value, $("runA").value, $("runB").value];
+  $("envA").value = b; runOptions($("runA"), b); $("runA").value = rb;
+  $("envB").value = a; runOptions($("runB"), a); $("runB").value = ra;
+};
+$("download").onclick = () => { location.href = "/api/compare.xlsx?" + state.lastQuery; };
+$("search").oninput = event => { filters.text = event.target.value; if (state.current) renderRows(); };
+$("profileForm").onsubmit = saveProfile;
+$("profileTest").onclick = testProfile;
+$("profileNew").onclick = () => { editProfile(null); $("profileKey").focus(); };
+init();
+</script>
+</body>
+</html>

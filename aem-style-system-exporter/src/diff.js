@@ -1,4 +1,4 @@
-// What changed between two export snapshots (see snapshot.js): templates,
+// What changed between two export runs (loaded by store.js): templates,
 // the policies templates map to components, policies, styles, theme tokens
 // and the CSS that styles' classes reach.
 //

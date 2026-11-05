@@ -1,6 +1,6 @@
 #!/bin/sh
-# Opens the compare page (what changed between two saved exports) in the
-# browser. With arguments, compares on the command line instead:
+# Opens the app on its History tab. With arguments, compares on the
+# command line instead:
 #   sh compare.sh --list
 #   sh compare.sh <before> <after>
 set -eu

@@ -116,6 +116,7 @@ function main() {
 
   console.log(`[MASTER] Environment: ${store.label(environment)}  ${author}`);
   console.log(`[MASTER] Run:         ${run.id}  (${path.relative(process.cwd(), run.dir) || run.dir})`);
+  console.log(`[MASTER] Run key:     ${environment.id}/${run.id}`);  // read by the app (jobs.js)
 
   let aem;
   try {

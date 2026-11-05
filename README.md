@@ -10,7 +10,7 @@ clone the repo, `cd` into a tool and follow its README.
 | [adobe-access-manager](adobe-access-manager/) | Validates users against your domain, previews idempotent access changes and assigns Adobe user groups through UMAPI |
 | [aep-monitor](aep-monitor/) | Health dashboard for AEP dataflows, Data Collection / Tags and CJA connections, with history and alerts |
 | [aem-groovy-runner](aem-groovy-runner/) | Runs Groovy scripts on AEM as a Cloud Service through the Groovy Console HTTP API |
-| [aem-style-system-exporter](aem-style-system-exporter/) | Exports AEM Style System policies, template associations and front-end CSS to Excel, with a change history and a page to compare exports |
+| [aem-style-system-exporter](aem-style-system-exporter/) | Exports AEM Style System policies, template associations and front-end CSS to Excel; a local app runs exports per environment, keeps every run and compares them over time or between environments |
 | [web-technology-inspector](web-technology-inspector/) | Inspects a page's scripts, network requests, third-party domains and AEM content mappings |
 | [cja-mcp](cja-mcp/) | Streamlit reporting UI over Adobe's Customer Journey Analytics MCP server |
 | [target-mcp](target-mcp/) | Streamlit reporting UI over Adobe's Target MCP server, with OAuth login |
