@@ -139,8 +139,11 @@ changed once finished, so people can export at the same time.
   (`jcr:content`) and its policy mappings (`policies`). Structure and initial
   content aren't read.
 - A template policy reference that doesn't resolve to an exported policy is
-  checked in AEM, and marks the export incomplete (exit code 2); see
-  `missingReferences` in `validation-report.json`. The log names it:
+  checked in AEM the way AEM looks it up: the site's policy root, then
+  `/conf/global`, `/apps` and `/libs`. One found there is listed as
+  inherited (`outsideRootReferences` in `validation-report.json`; its styles
+  aren't in this export). One found nowhere marks the export incomplete
+  (exit code 2; `missingReferences`), and the log names it:
 
   ```
   [CHECK] Missing in AEM: /conf/site/settings/wcm/policies/site/components/page/policy_123
@@ -150,6 +153,9 @@ changed once finished, so people can export at the same time.
   AEM answers 404 for such a policy; that's the finding, not a failed export.
   Fix the template's policy for that component in the template editor, or
   ignore it if the component isn't used.
+- In a template's policy mappings, AEM's JSON also shows the mapped policy's
+  `jcr:content` and `cq:styleGroups`; they aren't nodes of the template
+  (fetching them answers 404) and aren't read.
 - Access-control nodes (`rep:policy`, …) aren't read. A `[FAILED] … HTTP 404`
   line during the crawl means a node was listed but couldn't be read, usually
   because of the token user's permissions; the run is then incomplete.

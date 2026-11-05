@@ -114,11 +114,14 @@ function getChildNames(data, parentPath = "") {
         return false;
       }
 
-      // These embedded objects are not actual children
-      // under the template policy jcr:content node.
+      // In a template's policy mappings, AEM's JSON shows the mapped
+      // policy's own jcr:content and cq:styleGroups under the mapping
+      // nodes, at any depth (root, root/container, …), but they aren't
+      // nodes of the template: fetching them answers 404. Only cq:policy on
+      // the mapping nodes matters here.
       if (
         parentPath.startsWith(templateRoot + "/") &&
-        parentPath.endsWith("/policies/jcr:content") &&
+        parentPath.includes("/policies/jcr:content") &&
         (key === "jcr:content" || key === "cq:styleGroups")
       ) {
         return false;
@@ -503,36 +506,57 @@ async function verifyPolicyReferences(references) {
       return `${template} › ${location.replace(/^\//, "") || "(page)"}`;
     }))].join(", ");
 
+  // A relative cq:policy (site/components/x/policy_1) is looked up by AEM in
+  // the site's configuration first, then in these: a policy found there is
+  // inherited, not missing.
+  const inheritedRoots = ["/conf/global", "/apps", "/libs"].map(root => root + "/settings/wcm/policies");
+  const rawFor = policyPath => references.find(ref => ref.resolvedPolicyPath === policyPath)?.rawReference || "";
+
+  const exists = async candidate => {
+    try {
+      await requestJson(candidate, 0, { quiet: true });
+      return { exists: true };
+    } catch (error) {
+      return { exists: false, error: error.message || String(error) };
+    }
+  };
+
   const results = new Map();
 
   for (const policyPath of unresolvedPaths) {
-    try {
-      await requestJson(policyPath, 0, { quiet: true });
+    const raw = rawFor(policyPath);
+    const relative = raw && !raw.startsWith("/");
+    const own = await exists(policyPath);
+    let result;
 
-      results.set(policyPath, {
-        status: "Exists in AEM - Not Exported"
-      });
-
+    if (own.exists) {
+      result = { status: "Exists in AEM - Not Exported", foundAt: policyPath };
       console.log(`[CHECK] Exists outside the exported policy root: ${policyPath} (used by ${usedBy(policyPath)})`);
-
-    } catch (error) {
-      const message = error.message || String(error);
-
-      const status = /HTTP 404\b/.test(message)
-        ? "Not Found in AEM"
-        : "Verification Failed";
-
-      results.set(policyPath, {
-        status,
-        verificationError: message
-      });
-
-      console.warn(status === "Not Found in AEM"
-        ? `[CHECK] Missing in AEM: ${policyPath}\n` +
-          `        Used by template ${usedBy(policyPath)}: the template points to a policy that doesn't exist. ` +
-          "Fix the template's policy for that component, or ignore it if the component isn't used."
-        : `[CHECK] Couldn't check ${policyPath} (${message}); used by ${usedBy(policyPath)}`);
+    } else if (!/HTTP 404\b/.test(own.error)) {
+      result = { status: "Verification Failed", verificationError: own.error };
+      console.warn(`[CHECK] Couldn't check ${policyPath} (${own.error}); used by ${usedBy(policyPath)}`);
+    } else {
+      let inherited = null;
+      for (const root of relative ? inheritedRoots : []) {
+        const candidate = `${root}/${raw.replace(/^\/+/, "")}`;
+        if ((await exists(candidate)).exists) {
+          inherited = { root, candidate };
+          break;
+        }
+      }
+      if (inherited) {
+        result = { status: `Inherited from ${inherited.root.replace("/settings/wcm/policies", "")}`,
+                   foundAt: inherited.candidate };
+        console.log(`[CHECK] Inherited: ${raw} is in ${inherited.root} (used by ${usedBy(policyPath)})`);
+      } else {
+        result = { status: "Not Found in AEM", verificationError: own.error };
+        console.warn(`[CHECK] Missing in AEM: ${policyPath}\n` +
+          `        Used by template ${usedBy(policyPath)}: the template points to a policy that doesn't exist` +
+          (relative ? ` (also not in ${inheritedRoots.map(r => r.replace("/settings/wcm/policies", "")).join(", ")})` : "") +
+          ". Fix the template's policy for that component, or ignore it if the component isn't used.");
+      }
     }
+    results.set(policyPath, result);
   }
 
   for (const ref of references) {
@@ -542,6 +566,7 @@ async function verifyPolicyReferences(references) {
 
     if (result) {
       ref.status = result.status;
+      if (result.foundAt) ref.foundAt = result.foundAt;
 
       if (result.verificationError) {
         ref.verificationError = result.verificationError;
@@ -568,7 +593,7 @@ function save(filename, data) {
 async function main() {
 
   console.log("=".repeat(60));
-  console.log(" AEM STYLE SYSTEM EXPORTER - EWP");
+  console.log(" AEM STYLE SYSTEM EXPORTER");
   console.log("=".repeat(60));
   console.log("Author:       ", author);
   console.log("Policy root:  ", policyRoot);
@@ -620,7 +645,12 @@ async function main() {
   // Any template reference that did not resolve to an exported policy means
   // the export is incomplete (policy outside the scanned root) or the
   // template configuration is broken (policy missing in AEM).
-  const missingReferences = references.filter(ref => !ref.found);
+  // Only a policy that isn't in AEM (or couldn't be checked) is missing: one
+  // inherited from /conf/global, /apps or /libs, or outside the exported
+  // root, exists; it's listed, and its styles aren't in this export.
+  const missingReferences = references.filter(ref =>
+    !ref.found && ["Not Found in AEM", "Verification Failed", "Unverified"].includes(ref.status));
+  const outsideRootReferences = references.filter(ref => !ref.found && !missingReferences.includes(ref));
 
   const validation = {
     complete:
@@ -630,6 +660,7 @@ async function main() {
     errors,
     truncated,
     missingReferences,
+    outsideRootReferences,
     counts: {
       nodes: nodes.size,
       requests,
@@ -637,6 +668,7 @@ async function main() {
       templates: templates.length,
       references: references.length,
       missingReferences: missingReferences.length,
+      outsideRootReferences: outsideRootReferences.length,
       referencedPolicies: referencedStyles.length,
       unreferencedPolicies: unreferencedPolicies.length
     }
@@ -661,6 +693,7 @@ async function main() {
   console.log("Templates discovered:", templates.length);
   console.log("Policy references:   ", references.length);
   console.log("Missing references:  ", missingReferences.length);
+  console.log("Inherited / outside: ", outsideRootReferences.length);
   console.log("Errors:              ", errors.length);
   console.log("Truncated:           ", truncated);
   console.log("Duration:            ", duration, "seconds");
